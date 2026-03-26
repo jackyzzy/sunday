@@ -34,7 +34,7 @@ def run(task, thinking, model):
 
 
 async def _run_task(task: str, thinking: str, model_override: str | None):
-    """实际执行任务的异步函数（Phase 3：接入 AgentLoop + 记忆系统）"""
+    """实际执行任务的异步函数（Phase 4：接入工具系统与技能）"""
     import uuid
 
     from sunday.agent.executor import Executor
@@ -45,6 +45,9 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
     from sunday.config import settings
     from sunday.memory.context import ContextBuilder
     from sunday.memory.manager import MemoryManager
+    from sunday.skills.loader import SkillLoader
+    from sunday.tools.cli_tool import register_cli_tools
+    from sunday.tools.registry import ToolRegistry
 
     # 如果指定了 model_override，临时调整 settings
     cfg_settings = settings
@@ -104,11 +107,29 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
             thinking_level=level,
         )
         workspace_dir = cfg_settings.sunday.agent.workspace_dir
-        context_builder = ContextBuilder(workspace_dir)
+
+        # CLI 确认处理器：stdin 读取 y/n
+        async def cli_confirm(tool_name: str, arguments: dict, session_id: str) -> bool:
+            click.echo(f"\n⚠️  工具 '{tool_name}' 是不可逆操作，参数：{arguments}")
+            answer = click.prompt("是否继续执行？[y/N]", default="N")
+            return answer.strip().lower() in ("y", "yes")
+
+        # 工具注册表
+        registry = ToolRegistry(cfg_settings, confirmation_handler=cli_confirm)
+        register_cli_tools(registry)
+
+        # 技能加载器（注入 ContextBuilder 用于 L0 摘要）
+        skill_loader = SkillLoader(
+            project_skills_dir=workspace_dir.parent.parent / "skills",
+            user_skills_dir=workspace_dir / "skills",
+        )
+        skill_loader.discover()
+
+        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader)
         memory_manager = MemoryManager(workspace_dir, cfg_settings)
         loop = AgentLoop(
             planner=Planner(cfg_settings),
-            executor=Executor(cfg_settings),
+            executor=Executor(cfg_settings, tool_registry=registry),
             verifier=Verifier(cfg_settings),
             emit=cli_emit,
             context_builder=context_builder,
