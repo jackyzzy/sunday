@@ -1,0 +1,38 @@
+agent:
+  name: Sunday
+  workspace_dir: ~/.sunday/workspace
+  sessions_dir: ~/.sunday/sessions
+
+model:
+  provider: anthropic  # anthropic | openai | google | ollama
+  id: claude-opus-4-5
+  temperature: 0.2
+  max_tokens: 8192
+  base_url: null  # 自托管模型（如 Ollama）填写 URL
+
+reasoning:
+  max_steps: 10
+  thinking_level: medium  # off | minimal | low | medium | high
+  thinking_budget_tokens: 4096
+
+memory:
+  consolidation_cron: "0 4 * * *"
+  log_retention_days: 30
+  l0_max_lines: 100
+
+tools:
+  default_timeout: 30
+  max_output_chars: 4096
+  sandbox_mode: true
+  allow_list: []
+  deny_list:
+    - "rm -rf"
+    - "dd if="
+
+mcp:
+  servers: []
+
+skills:
+  extra_dirs: []
+
+tasks: {}

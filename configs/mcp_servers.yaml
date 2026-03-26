@@ -1,0 +1,13 @@
+# MCP 服务器配置示例
+# servers:
+#   - name: filesystem
+#     command: uvx
+#     args: ["mcp-server-filesystem", "--root", "~/"]
+#     enabled: true
+#
+#   - name: github
+#     command: uvx
+#     args: ["mcp-server-github"]
+#     env:
+#       GITHUB_TOKEN: "${GITHUB_TOKEN}"
+#     enabled: false
