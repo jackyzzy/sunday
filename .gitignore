@@ -10,3 +10,4 @@ workspace/memory/
 ~/.sunday/
 *.tmp
 cassettes/
+.claude/
