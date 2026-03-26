@@ -33,6 +33,11 @@ Phase 6：实用技能        → 日常办公自动化技能落地
 - [ ] 创建 `src/sunday/__init__.py`，定义包版本
 - [ ] 验证：`uv sync` 成功，`uv run python -c "import sunday"` 无报错
 
+**验证方案：**
+- 测试文件：`tests/unit/test_project_structure.py`
+- 主要用例：`test_pyproject_has_required_deps`、`test_pyproject_has_entry_point`、`test_pyproject_has_dev_extras`、`test_gitignore_protects_env`、`test_gitignore_protects_venv`、`test_gitignore_protects_workspace_memory`、`test_package_importable`、`test_env_example_has_required_vars`
+- 安全约束：纯静态检查，无网络，无文件写入
+
 ### T1-2 配置系统
 - [ ] 实现 `src/sunday/config.py`
   - 定义 `ModelConfig`、`ReasoningConfig`、`MemoryConfig`、`ToolsConfig`、`MCPConfig`、`SkillsConfig`、`AgentConfig`、`TaskConfig`、`SundayConfig`
@@ -45,12 +50,22 @@ Phase 6：实用技能        → 日常办公自动化技能落地
 - [ ] 创建 `configs/prompts/verifier.md`（验证阶段提示）
 - [ ] 单元测试：`tests/unit/test_config.py`（加载默认值、YAML 覆盖、缺失 key 抛异常）
 
+**验证方案：**
+- 测试文件：`tests/unit/test_config.py`
+- 主要用例：`test_sunday_config_defaults`、`test_get_api_key_success`、`test_get_api_key_missing`、`test_workspace_dir_in_agent_config`、`test_all_config_models_have_defaults`、`test_yaml_missing_fields_use_defaults`、`test_yaml_type_error_raises`、`test_workspace_dir_tilde_expanded`、`test_settings_sunday_cached`、`test_api_key_not_in_error_message`、`test_openai_api_key`、`test_unknown_provider_raises`、`test_tools_config_deny_list_defaults`、`test_mcp_servers_empty_by_default`
+- 安全约束：`tmp_path` 写临时 YAML、`patch.dict(os.environ)` 注入假 key，无真实 `.env`
+
 ### T1-3 工作区初始化
 - [ ] 创建 `workspace/SOUL.md`（Sunday 的默认身份与人格定义）
 - [ ] 创建 `workspace/AGENTS.md`（默认操作规则，含记忆使用方式）
 - [ ] 创建 `workspace/MEMORY.md`（空模板，含格式说明）
 - [ ] 创建 `workspace/USER.md`（空模板，含格式说明）
 - [ ] 创建 `workspace/TOOLS.md`（默认工具使用约定）
+
+**验证方案：**
+- 测试文件：`tests/unit/test_workspace.py`
+- 主要用例：`test_workspace_files_exist`、`test_workspace_files_nonempty`、`test_workspace_files_have_title`、`test_soul_md_has_sections`、`test_workspace_memory_in_gitignore`、`test_configs_prompts_exist`、`test_mcp_servers_yaml_parseable`
+- 安全约束：只读现有文件，无写入，无 mock
 
 ### T1-4 CLI 入口（最小版）
 - [ ] 实现 `src/sunday/cli.py`（Click）
@@ -60,13 +75,25 @@ Phase 6：实用技能        → 日常办公自动化技能落地
 - [ ] 在 `pyproject.toml` 注册 `sunday = "sunday.cli:main"` 入口点
 - [ ] 验证：`uv run sunday run "你好"` 能收到 LLM 回复
 
-**Phase 1 完成标准**：`uv run sunday run "今天天气怎么样"` 能返回 LLM 回复，配置从 `configs/agent.yaml` 读取。
+**验证方案：**
+- 测试文件：`tests/unit/test_cli.py`、`tests/unit/test_simple_agent.py`
+- 主要用例（CLI）：`test_help`、`test_version`、`test_tui_placeholder`、`test_gateway_start_placeholder`、`test_gateway_stop_placeholder`、`test_gateway_status_placeholder`、`test_skills_list_placeholder`、`test_run_no_api_key_exits_1`、`test_run_thinking_valid_values`、`test_run_model_override`、`test_memory_show_file_exists`、`test_memory_show_file_missing`、`test_memory_search_found`、`test_memory_search_not_found`
+- 主要用例（Agent）：`test_anthropic_success`、`test_thinking_block_filtered`、`test_openai_success`、`test_model_override_with_provider`、`test_model_override_id_only`、`test_thinking_budget_off`、`test_thinking_budget_high`、`test_unknown_provider_raises`、`test_http_error_propagates`、`test_system_prompt_includes_soul`
+- 安全约束：`CliRunner` 测试 CLI、`AsyncMock` mock httpx、`tmp_path` 创建 workspace、`patch.dict(os.environ)` 注入假 key
+
+**Phase 1 完成标准（可量化）：**
+- `uv run pytest tests/unit/ -v` 全绿（≥50 个用例）
+- `uv run ruff check src/ tests/` 零警告
+- `uv run sunday --version` 输出 `0.1.0`
+- 手动确认：`uv run sunday run "你好"` 能返回 LLM 回复（需真实 API key）
 
 ---
 
 ## Phase 2：Agent 执行循环
 
 **目标**：实现完整的 think→plan→decompose→execute→verify 循环，能处理多步任务。
+
+> **Phase 2 开始前**：为每个 Task 填写验证方案（测试文件、函数名、安全约束），经确认后再开始实现。
 
 ### T2-1 核心数据模型
 - [ ] 实现 `src/sunday/agent/models.py`
@@ -77,6 +104,8 @@ Phase 6：实用技能        → 日常办公自动化技能落地
   - `AgentState.history` 字段存储本会话历史对话
 - [ ] 单元测试：模型序列化/反序列化（`model_dump` / `model_validate`）
 
+**验证方案：** 待 Phase 2 开始前填写
+
 ### T2-2 Planner
 - [ ] 实现 `src/sunday/agent/planner.py`
   - `Planner.__init__(model_client, context_builder, config)`
@@ -85,6 +114,8 @@ Phase 6：实用技能        → 日常办公自动化技能落地
   - `THINKING_BUDGET` 映射表（off=0 / minimal=512 / low=1024 / medium=4096 / high=8192）
   - 规划阶段 temperature=0.3，禁止调用外部工具
 - [ ] 单元测试：`tests/unit/test_planner.py`（VCR 录制/回放 LLM 调用）
+
+**验证方案：** 待 Phase 2 开始前填写
 
 ### T2-3 Executor（ReAct 循环）
 - [ ] 实现 `src/sunday/agent/executor.py`
@@ -96,6 +127,8 @@ Phase 6：实用技能        → 日常办公自动化技能落地
   - 执行阶段 temperature=0
 - [ ] 单元测试：`tests/unit/test_executor.py`
 
+**验证方案：** 待 Phase 2 开始前填写
+
 ### T2-4 Verifier
 - [ ] 实现 `src/sunday/agent/verifier.py`
   - `VerifyResult`（passed, reason, should_replan）
@@ -103,6 +136,8 @@ Phase 6：实用技能        → 日常办公自动化技能落地
   - `Verifier.summarize(state) → str`：生成最终结果摘要
   - temperature=0
 - [ ] 单元测试：`tests/unit/test_verifier.py`
+
+**验证方案：** 待 Phase 2 开始前填写
 
 ### T2-5 AgentLoop 控制器
 - [ ] 实现 `src/sunday/agent/loop.py`
@@ -114,11 +149,15 @@ Phase 6：实用技能        → 日常办公自动化技能落地
   - `finally` 块保证日志写入
 - [ ] 集成测试：`tests/integration/test_agent_loop.py`（用简单任务端到端验证循环）
 
+**验证方案：** 待 Phase 2 开始前填写
+
 ### T2-6 接入 CLI
 - [ ] 更新 `sunday run "<任务>"` 命令，接入 AgentLoop
 - [ ] 实现临时的 `emit` 回调（打印到 stdout）
 - [ ] 实现临时的空 `ToolRegistry`（无工具，验证 Agent 能纯对话完成任务）
 - [ ] 验证：`uv run sunday run "给我写一首关于秋天的五言诗"` 走完完整循环
+
+**验证方案：** 待 Phase 2 开始前填写
 
 **Phase 2 完成标准**：`sunday run` 能展示 think→plan→execute→verify 的完整过程，打印每步进度和最终结果。
 
@@ -127,6 +166,8 @@ Phase 6：实用技能        → 日常办公自动化技能落地
 ## Phase 3：记忆系统
 
 **目标**：实现文件系统记忆，跨会话持久化，上下文注入。
+
+> **Phase 3 开始前**：为每个 Task 填写验证方案（测试文件、函数名、安全约束），经确认后再开始实现。
 
 ### T3-1 MemoryManager
 - [ ] 实现 `src/sunday/memory/manager.py`
@@ -166,6 +207,8 @@ Phase 6：实用技能        → 日常办公自动化技能落地
 ## Phase 4：工具系统与技能
 
 **目标**：实现工具调用管道，接入 CLI 工具和 MCP，实现技能懒加载。
+
+> **Phase 4 开始前**：为每个 Task 填写验证方案（测试文件、函数名、安全约束），经确认后再开始实现。
 
 ### T4-1 ToolRegistry 与 Guard
 - [ ] 实现 `src/sunday/tools/guard.py`
@@ -218,6 +261,8 @@ Phase 6：实用技能        → 日常办公自动化技能落地
 ## Phase 5：Gateway + TUI
 
 **目标**：实现本地守护进程和终端交互界面，完成完整的 edge agent 体验。
+
+> **Phase 5 开始前**：为每个 Task 填写验证方案（测试文件、函数名、安全约束），经确认后再开始实现。
 
 ### T5-1 Gateway 通信协议
 - [ ] 实现 `src/sunday/gateway/protocol.py`
@@ -286,6 +331,8 @@ Phase 6：实用技能        → 日常办公自动化技能落地
 ## Phase 6：实用技能
 
 **目标**：落地日常办公自动化，验证边端 agent 的实际价值。
+
+> **Phase 6 开始前**：为每个 Task 填写验证方案（测试文件、函数名、安全约束），经确认后再开始实现。
 
 ### T6-1 文件管理技能（增强）
 - [ ] 完善 `skills/files/` 技能：支持文件搜索、内容检索、批量重命名

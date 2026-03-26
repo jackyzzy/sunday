@@ -103,6 +103,7 @@ class SimpleAgent:
 
     def _build_system_prompt(self) -> str:
         from datetime import date
+
         from sunday.config import settings
 
         workspace = settings.sunday.agent.workspace_dir

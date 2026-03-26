@@ -1,5 +1,7 @@
-import click
 import asyncio
+
+import click
+
 from sunday import __version__
 
 
@@ -33,8 +35,8 @@ def run(task, thinking, model):
 
 async def _run_task(task: str, thinking: str, model_override: str | None):
     """实际执行任务的异步函数"""
-    from sunday.config import settings
     from sunday.agent.simple import SimpleAgent  # Phase 1 临时实现
+    from sunday.config import settings
 
     click.echo(f"🤔 任务：{task}")
     click.echo("─" * 50)
@@ -104,11 +106,11 @@ def memory_search(keyword):
     found = False
     for md_file in workspace.glob("*.md"):
         content = md_file.read_text(encoding="utf-8")
-        lines = [l for l in content.splitlines() if keyword.lower() in l.lower()]
+        lines = [line for line in content.splitlines() if keyword.lower() in line.lower()]
         if lines:
             click.echo(f"\n📄 {md_file.name}:")
-            for line in lines:
-                click.echo(f"  {line}")
+            for ln in lines:
+                click.echo(f"  {ln}")
             found = True
     if not found:
         click.echo(f"未找到包含 '{keyword}' 的记忆")

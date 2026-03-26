@@ -39,6 +39,31 @@ THINK → PLAN → DECOMPOSE → EXECUTE（ReAct）→ VERIFY → 记忆更新
 
 ---
 
+## 验证优先原则
+
+**每个 Task 的开发流程：**
+
+1. **先写验证方案**（不写实现代码）：明确测试文件名、函数名、安全约束
+2. **方案经用户确认**后才开始写实现代码
+3. **实现完成后运行验证**：全绿才算 Task done
+4. **验证通过后更新 task.md**：勾选对应 checkbox
+
+**安全约束（所有测试必须遵守）：**
+- 文件隔离：使用 `pytest` 的 `tmp_path`，不操作 `~/.sunday/`
+- 网络隔离：用 `unittest.mock.AsyncMock` mock httpx，不调用真实 API
+- 密钥隔离：用 `patch.dict(os.environ)` 注入假 key，不读取真实 `.env`
+- CLI 隔离：用 `click.testing.CliRunner`，不触发真实 stdin/stdout
+
+**验证方案模板（写在 task.md 每个 Task 内）：**
+```
+验证方案：
+- 测试文件：tests/unit/test_XXX.py
+- 主要用例：test_foo_bar、test_baz_qux（列出函数名）
+- 安全约束：tmp_path / mock httpx / fake env key
+```
+
+---
+
 ## 代码规范
 
 ### Python 风格
