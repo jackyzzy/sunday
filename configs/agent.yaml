@@ -35,4 +35,11 @@ mcp:
 skills:
   extra_dirs: []
 
-tasks: {}
+tasks:
+  daily_brief:
+    description: "每日简报：汇总今日未读邮件摘要、当天日历事件、待处理事项"
+    steps:
+      - "列出今天的未读邮件（最多 10 封），提取主题和发件人"
+      - "读取今天的日历事件"
+      - "生成简洁的日报摘要，包含邮件要点和日程安排"
+      - "将简报写入 workspace/memory/ 今日日志"

@@ -82,3 +82,38 @@ def test_run_missing_memory_dir(tmp_path):
     janitor = MemoryJanitor(workspace)
     stats = janitor.run()
     assert stats == {"deleted": 0, "kept": 0}
+
+
+# ── T6-6 memory_consolidate.py 脚本验证 ──────────────────────────────────────
+
+
+def test_consolidate_script_importable():
+    """scripts/memory_consolidate.py 可 import 且有 main() 函数"""
+    import importlib.util
+    from pathlib import Path
+
+    script_path = Path(__file__).parent.parent.parent / "scripts" / "memory_consolidate.py"
+    assert script_path.exists(), "scripts/memory_consolidate.py 不存在"
+
+    spec = importlib.util.spec_from_file_location("memory_consolidate", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert hasattr(module, "main"), "memory_consolidate.py 缺少 main() 函数"
+    assert callable(module.main)
+
+
+def test_task_runner_script_importable():
+    """scripts/task_runner.py 可 import 且有 TaskRunner 类"""
+    import importlib.util
+    from pathlib import Path
+
+    script_path = Path(__file__).parent.parent.parent / "scripts" / "task_runner.py"
+    assert script_path.exists(), "scripts/task_runner.py 不存在"
+
+    spec = importlib.util.spec_from_file_location("task_runner", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert hasattr(module, "TaskRunner"), "task_runner.py 缺少 TaskRunner 类"
+    assert hasattr(module, "main"), "task_runner.py 缺少 main() 函数"
