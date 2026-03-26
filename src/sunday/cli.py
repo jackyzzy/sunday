@@ -34,16 +34,81 @@ def run(task, thinking, model):
 
 
 async def _run_task(task: str, thinking: str, model_override: str | None):
-    """实际执行任务的异步函数"""
-    from sunday.agent.simple import SimpleAgent  # Phase 1 临时实现
+    """实际执行任务的异步函数（Phase 2：接入 AgentLoop）"""
+    import uuid
+
+    from sunday.agent.executor import Executor
+    from sunday.agent.loop import AgentLoop
+    from sunday.agent.models import AgentState, ThinkingLevel
+    from sunday.agent.planner import Planner
+    from sunday.agent.verifier import Verifier
     from sunday.config import settings
 
-    click.echo(f"🤔 任务：{task}")
+    # 如果指定了 model_override，临时调整 settings
+    cfg_settings = settings
+    if model_override:
+        # 简单做法：直接用 SimpleAgent 兼容 model override
+        try:
+            from sunday.agent.simple import SimpleAgent
+            click.echo(f"任务：{task}")
+            click.echo("─" * 50)
+            agent = SimpleAgent(settings, thinking_level=thinking, model_override=model_override)
+            result = await agent.run(task)
+            click.echo(result)
+            return
+        except ValueError as e:
+            click.echo(f"配置错误：{e}", err=True)
+            click.echo("请检查 .env 文件中的 API key 配置", err=True)
+            raise SystemExit(1)
+        except Exception as e:
+            click.echo(f"执行失败：{e}", err=True)
+            raise SystemExit(1)
+
+    click.echo(f"任务：{task}")
     click.echo("─" * 50)
 
     try:
-        agent = SimpleAgent(settings, thinking_level=thinking, model_override=model_override)
-        result = await agent.run(task)
+        cfg_settings.get_api_key(cfg_settings.sunday.model.provider)
+    except ValueError as e:
+        click.echo(f"配置错误：{e}", err=True)
+        click.echo("请检查 .env 文件中的 API key 配置", err=True)
+        raise SystemExit(1)
+
+    # emit 回调：打印进度到 stdout
+    async def cli_emit(session_id: str, event_type: str, data: dict) -> None:
+        if event_type == "status":
+            status = data.get("status", "")
+            if status == "thinking":
+                click.echo("[思考中...]")
+            elif status.startswith("executing:"):
+                click.echo(f"[执行 {status.split(':', 1)[1]}]")
+            elif status == "replanning":
+                click.echo("[重新规划中...]")
+            elif status == "summarizing":
+                click.echo("[生成摘要...]")
+        elif event_type == "plan":
+            goal = data.get("goal", "")
+            steps = data.get("steps", [])
+            click.echo(f"\n计划：{goal}")
+            for s in steps:
+                click.echo(f"  · {s['id']}: {s['intent']}")
+            click.echo("")
+
+    try:
+        level = ThinkingLevel(thinking)
+        state = AgentState(
+            session_id=uuid.uuid4().hex[:12],
+            task=task,
+            thinking_level=level,
+        )
+        loop = AgentLoop(
+            planner=Planner(cfg_settings),
+            executor=Executor(cfg_settings),
+            verifier=Verifier(cfg_settings),
+            emit=cli_emit,
+        )
+        result = await loop.run(state)
+        click.echo("\n" + "─" * 50)
         click.echo(result)
     except ValueError as e:
         click.echo(f"配置错误：{e}", err=True)
