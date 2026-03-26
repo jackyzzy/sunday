@@ -1,0 +1,35 @@
+/* Sunday TUI 全局样式 */
+
+Screen {
+    layout: vertical;
+}
+
+#header {
+    height: 1;
+    background: $primary;
+    color: $text;
+    padding: 0 1;
+    text-style: bold;
+}
+
+#info-bar {
+    height: 1;
+    background: $surface;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+ChatLog {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+StatusBar {
+    height: 1;
+    dock: bottom;
+}
+
+InputBar {
+    height: 3;
+    dock: bottom;
+}

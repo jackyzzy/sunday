@@ -1,8 +1,17 @@
 import asyncio
+import os
+import signal
+import subprocess
+from pathlib import Path
 
 import click
 
 from sunday import __version__
+
+
+def _gateway_pid_file() -> Path:
+    """返回 PID 文件路径（~/.sunday/gateway.pid）。"""
+    return Path.home() / ".sunday" / "gateway.pid"
 
 
 @click.group(invoke_without_command=True)
@@ -16,10 +25,12 @@ def main(ctx):
 
 
 @main.command()
-def tui():
+@click.option("--port", default=7899, help="Gateway 端口")
+def tui(port):
     """启动交互式终端界面（默认模式）"""
-    click.echo("[TODO] TUI 将在 Phase 5 实现")
-    click.echo("提示：使用 'sunday run \"<任务>\"' 进行单次任务执行")
+    from sunday.tui.app import SundayApp
+    app = SundayApp(gateway_url=f"ws://localhost:{port}", auto_connect=True)
+    app.run()
 
 
 @main.command()
@@ -154,21 +165,63 @@ def gateway():
 
 
 @gateway.command("start")
-def gateway_start():
-    """启动 Gateway 守护进程"""
-    click.echo("[TODO] Gateway 将在 Phase 5 实现")
+@click.option("--port", default=7899, help="监听端口")
+def gateway_start(port):
+    """后台启动 Gateway 守护进程"""
+    pid_file = _gateway_pid_file()
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # 检查是否已运行
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)
+            click.echo(f"Gateway 已在运行（PID={pid}）")
+            return
+        except (ProcessLookupError, ValueError):
+            pass
+
+    proc = subprocess.Popen(
+        ["python", "-m", "sunday.gateway.__main__", "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pid_file.write_text(str(proc.pid))
+    click.echo(f"Gateway 已启动（PID={proc.pid}，端口={port}）")
 
 
 @gateway.command("stop")
 def gateway_stop():
     """停止 Gateway 守护进程"""
-    click.echo("[TODO] Gateway 将在 Phase 5 实现")
+    pid_file = _gateway_pid_file()
+    if not pid_file.exists():
+        click.echo("Gateway 未运行（PID 文件不存在）")
+        return
+    try:
+        pid = int(pid_file.read_text().strip())
+        os.kill(pid, signal.SIGTERM)
+        pid_file.unlink(missing_ok=True)
+        click.echo(f"已发送 SIGTERM（PID={pid}）")
+    except (ProcessLookupError, ValueError):
+        pid_file.unlink(missing_ok=True)
+        click.echo("进程不存在，已清理 PID 文件")
 
 
 @gateway.command("status")
 def gateway_status():
     """查看 Gateway 运行状态"""
-    click.echo("[TODO] Gateway 将在 Phase 5 实现")
+    pid_file = _gateway_pid_file()
+    if not pid_file.exists():
+        click.echo("Gateway 未运行")
+        return
+    try:
+        pid = int(pid_file.read_text().strip())
+        os.kill(pid, 0)  # signal 0 = 检查进程存在
+        click.echo(f"Gateway 运行中（PID={pid}）")
+    except (ProcessLookupError, ValueError):
+        click.echo("Gateway 未运行（进程不存在）")
+        pid_file.unlink(missing_ok=True)
 
 
 @main.group()
@@ -218,4 +271,20 @@ def skills():
 @skills.command("list")
 def skills_list():
     """列出所有可用技能"""
-    click.echo("[TODO] 技能系统将在 Phase 4 实现")
+    from pathlib import Path
+
+    from sunday.config import settings
+    from sunday.skills.loader import SkillLoader
+
+    workspace_dir = settings.sunday.agent.workspace_dir
+    loader = SkillLoader(
+        project_skills_dir=Path(__file__).parent.parent.parent / "skills",
+        user_skills_dir=workspace_dir / "skills",
+    )
+    found = loader.discover()
+    if not found:
+        click.echo("未发现任何技能")
+        return
+    click.echo(f"发现 {len(found)} 个技能：")
+    for skill in found:
+        click.echo(f"  · {skill.name}: {skill.description}")
