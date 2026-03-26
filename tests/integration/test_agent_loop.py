@@ -267,3 +267,89 @@ async def test_max_steps_error_handled(tmp_path):
     result = await loop.run(state)
     assert result == "部分完成"
     assert len(state.step_results) == 2
+
+
+# ── T3-4：ContextBuilder + MemoryManager 接入 AgentLoop ──────────────────────
+
+async def test_loop_injects_context_into_planner(tmp_path):
+    """context_builder.build() 被调用，planner.system_prompt 被设置"""
+    from sunday.memory.context import ContextBuilder
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "memory").mkdir()
+    (workspace / "SOUL.md").write_text("# Soul\n你是 Sunday。")
+
+    plan = _make_plan(1)
+    planner = MagicMock(spec=Planner)
+    planner.think_and_plan = AsyncMock(return_value=plan)
+    planner.system_prompt = ""
+
+    executor = MagicMock(spec=Executor)
+    executor.run = AsyncMock(return_value=_make_step_result("step_1"))
+
+    verifier = MagicMock(spec=Verifier)
+    verifier.check = AsyncMock(return_value=VerifyResult(passed=True, reason="ok"))
+    verifier.summarize = AsyncMock(return_value="done")
+
+    context_builder = ContextBuilder(workspace)
+    loop = AgentLoop(
+        planner=planner,
+        executor=executor,
+        verifier=verifier,
+        context_builder=context_builder,
+    )
+    state = AgentState(session_id="s1", task="测试注入")
+    await loop.run(state)
+
+    # system_prompt 被注入（包含 SOUL.md 内容）
+    assert "你是 Sunday" in planner.system_prompt
+
+
+async def test_loop_calls_memory_consolidate(tmp_path):
+    """memory_manager.consolidate_session 在循环结束后被调用"""
+    from unittest.mock import AsyncMock as AM
+
+    plan = _make_plan(1)
+    planner = MagicMock(spec=Planner)
+    planner.think_and_plan = AsyncMock(return_value=plan)
+
+    executor = MagicMock(spec=Executor)
+    executor.run = AsyncMock(return_value=_make_step_result("step_1"))
+
+    verifier = MagicMock(spec=Verifier)
+    verifier.check = AsyncMock(return_value=VerifyResult(passed=True, reason="ok"))
+    verifier.summarize = AsyncMock(return_value="done")
+
+    memory_manager = MagicMock()
+    memory_manager.consolidate_session = AM(return_value=None)
+
+    loop = AgentLoop(
+        planner=planner,
+        executor=executor,
+        verifier=verifier,
+        memory_manager=memory_manager,
+    )
+    state = AgentState(session_id="s2", task="记忆整合测试")
+    await loop.run(state)
+
+    memory_manager.consolidate_session.assert_called_once_with(state)
+
+
+async def test_loop_no_context_builder_runs_fine(tmp_path):
+    """不传 context_builder 时循环正常运行（向后兼容）"""
+    plan = _make_plan(1)
+    planner = MagicMock(spec=Planner)
+    planner.think_and_plan = AsyncMock(return_value=plan)
+
+    executor = MagicMock(spec=Executor)
+    executor.run = AsyncMock(return_value=_make_step_result("step_1"))
+
+    verifier = MagicMock(spec=Verifier)
+    verifier.check = AsyncMock(return_value=VerifyResult(passed=True, reason="ok"))
+    verifier.summarize = AsyncMock(return_value="done")
+
+    loop = AgentLoop(planner=planner, executor=executor, verifier=verifier)
+    state = AgentState(session_id="s3", task="向后兼容测试")
+    result = await loop.run(state)
+    assert result == "done"

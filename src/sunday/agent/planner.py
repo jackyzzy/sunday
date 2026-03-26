@@ -1,4 +1,4 @@
-"""Phase 2：Planner — THINK + PLAN + DECOMPOSE"""
+"""Phase 2/3：Planner — THINK + PLAN + DECOMPOSE（支持注入 system_prompt）"""
 from __future__ import annotations
 
 import json
@@ -82,8 +82,9 @@ class Planner:
     规划阶段使用低温度（0.3），禁止调用外部工具。
     """
 
-    def __init__(self, settings: "Settings") -> None:
+    def __init__(self, settings: "Settings", system_prompt: str = "") -> None:
         self.settings = settings
+        self.system_prompt = system_prompt  # 由 ContextBuilder 注入
 
     async def think_and_plan(self, state: AgentState) -> Plan:
         """根据任务和上下文生成结构化 Plan。"""
@@ -96,7 +97,9 @@ class Planner:
         thinking_level = state.thinking_level
         budget = THINKING_BUDGET.get(thinking_level, 4096)
 
-        prompt = _PLAN_PROMPT.format(task=state.task)
+        # 将 system_prompt（L0 上下文）追加到规划提示前
+        task_context = f"{self.system_prompt}\n\n---\n\n" if self.system_prompt else ""
+        prompt = task_context + _PLAN_PROMPT.format(task=state.task)
 
         if provider == "anthropic":
             raw = await self._call_anthropic(

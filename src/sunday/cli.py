@@ -34,7 +34,7 @@ def run(task, thinking, model):
 
 
 async def _run_task(task: str, thinking: str, model_override: str | None):
-    """实际执行任务的异步函数（Phase 2：接入 AgentLoop）"""
+    """实际执行任务的异步函数（Phase 3：接入 AgentLoop + 记忆系统）"""
     import uuid
 
     from sunday.agent.executor import Executor
@@ -43,6 +43,8 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
     from sunday.agent.planner import Planner
     from sunday.agent.verifier import Verifier
     from sunday.config import settings
+    from sunday.memory.context import ContextBuilder
+    from sunday.memory.manager import MemoryManager
 
     # 如果指定了 model_override，临时调整 settings
     cfg_settings = settings
@@ -101,11 +103,16 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
             task=task,
             thinking_level=level,
         )
+        workspace_dir = cfg_settings.sunday.agent.workspace_dir
+        context_builder = ContextBuilder(workspace_dir)
+        memory_manager = MemoryManager(workspace_dir, cfg_settings)
         loop = AgentLoop(
             planner=Planner(cfg_settings),
             executor=Executor(cfg_settings),
             verifier=Verifier(cfg_settings),
             emit=cli_emit,
+            context_builder=context_builder,
+            memory_manager=memory_manager,
         )
         result = await loop.run(state)
         click.echo("\n" + "─" * 50)

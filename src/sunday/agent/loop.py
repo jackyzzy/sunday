@@ -1,14 +1,18 @@
-"""Phase 2：AgentLoop — 主控制器"""
+"""Phase 2/3：AgentLoop — 主控制器（接入记忆系统）"""
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from sunday.agent.executor import Executor, MaxStepsError, RepetitionError
 from sunday.agent.models import AgentState, StepStatus
 from sunday.agent.planner import Planner
 from sunday.agent.verifier import Verifier
+
+if TYPE_CHECKING:
+    from sunday.memory.context import ContextBuilder
+    from sunday.memory.manager import MemoryManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,7 @@ class AgentLoop:
 
     依赖通过构造函数注入，不直接 import gateway。
     emit 回调解耦 AgentLoop 和 Gateway。
+    context_builder 和 memory_manager 为可选注入（Phase 3+）。
     """
 
     def __init__(
@@ -34,15 +39,25 @@ class AgentLoop:
         executor: Executor,
         verifier: Verifier,
         emit: EmitCallable | None = None,
+        context_builder: "ContextBuilder | None" = None,
+        memory_manager: "MemoryManager | None" = None,
     ) -> None:
         self.planner = planner
         self.executor = executor
         self.verifier = verifier
         self.emit = emit or _noop_emit
+        self.context_builder = context_builder
+        self.memory_manager = memory_manager
 
     async def run(self, state: AgentState) -> str:
         """执行完整的 think→plan→execute→verify 循环，返回最终摘要。"""
         try:
+            # 注入 L0 上下文到 Planner（Phase 3+）
+            if self.context_builder is not None:
+                ctx = self.context_builder.build(state.session_id)
+                self.planner.system_prompt = ctx.system_prompt
+                logger.debug("上下文注入完成，token_estimate=%d", ctx.token_estimate)
+
             await self.emit(state.session_id, "status", {"status": "thinking"})
 
             # THINK + PLAN
@@ -124,6 +139,12 @@ class AgentLoop:
             await self.emit(state.session_id, "status", {"status": "summarizing"})
             summary = await self.verifier.summarize(state)
             await self.emit(state.session_id, "status", {"status": "idle"})
+
+            # 记忆整合（Phase 3+）
+            if self.memory_manager is not None:
+                await self.memory_manager.consolidate_session(state)
+                logger.debug("记忆整合完成，session=%s", state.session_id)
+
             return summary
 
         except asyncio.CancelledError:
