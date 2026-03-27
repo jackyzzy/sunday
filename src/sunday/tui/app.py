@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -42,7 +43,7 @@ class SundayApp(App):
         super().__init__(**kwargs)
         self.gateway_url = gateway_url
         self.auto_connect = auto_connect
-        self.session_id: str = ""
+        self.session_id: str = str(uuid.uuid4())
         self.thinking_level: str = "medium"
         self.model_override: str | None = None
         self._ws = None
@@ -89,7 +90,7 @@ class SundayApp(App):
                 data = json.loads(raw)
                 await self.handle_gateway_event(data)
             except Exception as e:
-                logger.debug("事件处理失败：%s", e)
+                logger.warning("事件处理失败：%s", e)
 
     async def handle_gateway_event(self, data: dict) -> None:
         """处理 Gateway 推送的事件，更新 UI 组件。"""

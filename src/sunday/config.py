@@ -29,7 +29,7 @@ class ModelConfig(BaseModel):
 class ReasoningConfig(BaseModel):
     """推理与思考配置"""
 
-    max_steps: int = 10
+    max_steps: int = 15
     thinking_level: str = "medium"  # off | minimal | low | medium | high
     thinking_budget_tokens: int = 4096
 

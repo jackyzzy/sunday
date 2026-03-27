@@ -2,6 +2,7 @@ import asyncio
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import click
@@ -12,6 +13,11 @@ from sunday import __version__
 def _gateway_pid_file() -> Path:
     """返回 PID 文件路径（~/.sunday/gateway.pid）。"""
     return Path.home() / ".sunday" / "gateway.pid"
+
+
+def _gateway_log_file() -> Path:
+    """返回 Gateway 日志文件路径（~/.sunday/logs/gateway.log）。"""
+    return Path.home() / ".sunday" / "logs" / "gateway.log"
 
 
 @click.group(invoke_without_command=True)
@@ -178,7 +184,7 @@ def gateway_start(port):
             pass
 
     proc = subprocess.Popen(
-        ["python", "-m", "sunday.gateway.__main__", "--port", str(port)],
+        [sys.executable, "-m", "sunday.gateway.__main__", "--port", str(port)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
@@ -218,6 +224,43 @@ def gateway_status():
     except (ProcessLookupError, ValueError):
         click.echo("Gateway 未运行（进程不存在）")
         pid_file.unlink(missing_ok=True)
+
+
+@main.group()
+def logs():
+    """查看各组件日志"""
+    pass
+
+
+@logs.command("gateway")
+@click.option("--lines", "-n", default=50, help="显示最后 N 行（默认 50）")
+@click.option("--follow", "-f", is_flag=True, default=False, help="实时跟踪（类似 tail -f）")
+def logs_gateway(lines: int, follow: bool) -> None:
+    """查看 Gateway 日志"""
+    log_file = _gateway_log_file()
+    if not log_file.exists():
+        click.echo(f"日志文件不存在：{log_file}\n提示：请先运行 sunday gateway start", err=True)
+        raise SystemExit(1)
+
+    if follow:
+        import time
+        with log_file.open(encoding="utf-8") as f:
+            f.seek(0, 2)
+            click.echo(f"跟踪 {log_file}（Ctrl+C 退出）")
+            try:
+                while True:
+                    line = f.readline()
+                    if line:
+                        click.echo(line, nl=False)
+                    else:
+                        time.sleep(0.2)
+            except KeyboardInterrupt:
+                pass
+        return
+
+    all_lines = log_file.read_text(encoding="utf-8").splitlines()
+    for line in all_lines[-lines:]:
+        click.echo(line)
 
 
 @main.group()

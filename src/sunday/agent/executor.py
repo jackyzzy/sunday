@@ -46,6 +46,7 @@ _STEP_SYSTEM_PROMPT = """你是 Sunday，一个运行在用户本地电脑上的
 执行原则：
 - 直接执行，不解释过程
 - 如果有可用工具，优先使用工具完成任务
+- 工具调用有次数限制，信息足够时请直接输出结果，不要过度收集
 - 任务完成后直接停止，不要继续调用工具
 - 如果无需工具即可完成，直接输出结果
 """
@@ -80,6 +81,26 @@ class Executor:
         last_tool_call: tuple[str, str] | None = None
 
         for i in range(max_steps):
+            # 最后一次机会：禁用工具，强制模型整合已有信息直接输出
+            if i == max_steps - 1:
+                messages.append({
+                    "role": "user",
+                    "content": "你已用完工具调用次数。请根据以上收集到的信息，直接输出最终结果，不要再调用工具。",
+                })
+                response_data = await self._call_llm(
+                    system, messages, [], model_cfg, api_key
+                )
+                output = self._extract_text(response_data)
+                logger.warning(
+                    "步骤 %s 达到最大迭代次数 %d，已强制收尾输出", step.id, max_steps
+                )
+                return StepResult(
+                    step_id=step.id,
+                    status=StepStatus.DONE,
+                    output=output,
+                    react_iterations=iterations,
+                )
+
             response_data = await self._call_llm(
                 system, messages, tools, model_cfg, api_key
             )
@@ -163,10 +184,6 @@ class Executor:
                     "tool_call_id": tool_call_id,
                     "content": observation,
                 })
-
-        raise MaxStepsError(
-            f"步骤 {step.id} 超出最大迭代次数 {max_steps}，强制终止"
-        )
 
     # ── 内部 LLM 调用（执行阶段 temperature=0） ────────────────────────────
 
