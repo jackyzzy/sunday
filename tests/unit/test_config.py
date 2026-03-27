@@ -209,3 +209,40 @@ def test_sunday_config_file_missing_falls_back_to_defaults(tmp_path):
         # 应返回全默认配置而不是抛异常
         assert cfg.agent.name == "Sunday"
         assert cfg.model.provider == "anthropic"
+
+
+# ── api_key_env 新增 3 个测试 ─────────────────────────────────────────────────
+
+def test_get_api_key_via_explicit_env():
+    """api_key_env 显式指定时，从对应环境变量读取 key（忽略 provider 映射）"""
+    import os
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
+        mp.setenv("OPENAI_API_KEY", "")
+        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        from sunday.config import Settings
+        s = Settings()
+        key = s.get_api_key("openai", api_key_env="DEEPSEEK_API_KEY")
+        assert key == "sk-deepseek-test"
+
+
+def test_get_api_key_fallback_to_provider():
+    """api_key_env=None 时，回退到按 provider 名的默认映射"""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("ANTHROPIC_API_KEY", "sk-ant-fallback")
+        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        from sunday.config import Settings
+        s = Settings()
+        key = s.get_api_key("anthropic", api_key_env=None)
+        assert key == "sk-ant-fallback"
+
+
+def test_get_api_key_missing_env_raises():
+    """api_key_env 指向不存在的环境变量时，抛出 ValueError 并提示变量名"""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("MOONSHOT_API_KEY", raising=False)
+        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        from sunday.config import Settings
+        s = Settings()
+        with pytest.raises(ValueError, match="MOONSHOT_API_KEY"):
+            s.get_api_key("openai", api_key_env="MOONSHOT_API_KEY")

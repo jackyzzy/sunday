@@ -7,8 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
+
+# 将 .env 注入 os.environ，使 get_api_key 中的 os.environ.get() 能读取到自定义变量
+load_dotenv(override=False)
 
 
 class ModelConfig(BaseModel):
@@ -19,6 +23,7 @@ class ModelConfig(BaseModel):
     temperature: float = 0.2
     max_tokens: int = 8192
     base_url: str | None = None
+    api_key_env: str | None = None  # 指定从哪个环境变量读取 API key，优先于 provider 默认映射
 
 
 class ReasoningConfig(BaseModel):
@@ -130,8 +135,17 @@ class Settings(BaseSettings):
 
         return SundayConfig(**raw)
 
-    def get_api_key(self, provider: str) -> str:
-        """获取指定 provider 的 API key，找不到时抛出 ValueError"""
+    def get_api_key(self, provider: str, api_key_env: str | None = None) -> str:
+        """获取指定 provider 的 API key，找不到时抛出 ValueError。
+
+        优先使用 api_key_env 指定的环境变量名（来自 agent.yaml model.api_key_env），
+        未指定时回退到按 provider 名称的默认映射。
+        """
+        if api_key_env:
+            key = os.environ.get(api_key_env, "")
+            if not key:
+                raise ValueError(f"环境变量 '{api_key_env}' 未设置，请在 .env 中配置")
+            return key
         key_map = {
             "anthropic": self.anthropic_api_key,
             "openai": self.openai_api_key,
@@ -141,7 +155,7 @@ class Settings(BaseSettings):
         if not key:
             raise ValueError(
                 f"未找到 provider '{provider}' 的 API key，"
-                f"请在 .env 文件中设置 {provider.upper()}_API_KEY"
+                f"请在 .env 中设置 {provider.upper()}_API_KEY 或在 agent.yaml 中配置 model.api_key_env"
             )
         return key
 

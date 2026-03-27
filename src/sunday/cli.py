@@ -84,8 +84,8 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
     click.echo("─" * 50)
 
     try:
-        cfg_settings.get_api_key(cfg_settings.sunday.model.provider)
-    except ValueError as e:
+        cfg_settings.get_api_key(cfg_settings.sunday.model.provider, cfg_settings.sunday.model.api_key_env)
+    except (ValueError, KeyError) as e:
         click.echo(f"配置错误：{e}", err=True)
         click.echo("请检查 .env 文件中的 API key 配置", err=True)
         raise SystemExit(1)
@@ -149,10 +149,6 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
         result = await loop.run(state)
         click.echo("\n" + "─" * 50)
         click.echo(result)
-    except ValueError as e:
-        click.echo(f"配置错误：{e}", err=True)
-        click.echo("请检查 .env 文件中的 API key 配置", err=True)
-        raise SystemExit(1)
     except Exception as e:
         click.echo(f"执行失败：{e}", err=True)
         raise SystemExit(1)

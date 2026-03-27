@@ -245,8 +245,8 @@ uv run python scripts/memory_consolidate.py
 ```yaml
 agent:
   name: Sunday
-  workspace_dir: ~/.sunday/workspace   # 记忆工作区
-  sessions_dir: ~/.sunday/sessions     # 会话存储
+  workspace_dir: .sunday/workspace   # 记忆工作区
+  sessions_dir: .sunday/sessions     # 会话存储
 
 model:
   provider: anthropic                  # anthropic | openai | google | ollama

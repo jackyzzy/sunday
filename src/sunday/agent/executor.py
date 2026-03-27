@@ -36,7 +36,8 @@ class ToolRegistryProtocol(Protocol):
     async def execute(self, tool_name: str, arguments: dict, session_id: str) -> str: ...
 
 
-_STEP_SYSTEM_PROMPT = """你是一个严格执行任务的 AI 助手。
+_STEP_SYSTEM_PROMPT = """你是 Sunday，一个运行在用户本地电脑上的个人 AI 智能体助手。\
+你不是 Claude、GPT 或任何其他 AI 产品，你就是 Sunday。
 
 当前步骤：{intent}
 期望输出：{expected_output}
@@ -66,7 +67,7 @@ class Executor:
         cfg = self.settings.sunday
         model_cfg = cfg.model
         max_steps = cfg.reasoning.max_steps
-        api_key = self.settings.get_api_key(model_cfg.provider)
+        api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
 
         system = _STEP_SYSTEM_PROMPT.format(
             intent=step.intent,
@@ -107,7 +108,7 @@ class Executor:
                     react_iterations=iterations,
                 )
 
-            tool_name, arguments_str = tool_call
+            tool_name, arguments_str, tool_call_id = tool_call
             call_key = (tool_name, arguments_str)
             if call_key == last_tool_call:
                 raise RepetitionError(f"连续重复调用工具 {tool_name}，参数：{arguments_str}")
@@ -129,9 +130,39 @@ class Executor:
                 observation=observation,
             ))
 
-            # 将工具调用和结果追加到消息历史
-            messages.append({"role": "assistant", "content": self._extract_text(response_data)})
-            messages.append({"role": "user", "content": f"工具 {tool_name} 返回：{observation}"})
+            # 按 provider 使用正确的消息格式追加工具调用和结果
+            if model_cfg.provider == "anthropic":
+                # Anthropic：assistant 消息含原始 content blocks（包含 tool_use），
+                # 工具结果用 tool_result block
+                messages.append({
+                    "role": "assistant",
+                    "content": response_data.get("content", []),
+                })
+                messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id,
+                        "content": observation,
+                    }],
+                })
+            else:
+                # OpenAI 兼容（DeepSeek、Qwen 等）：assistant 消息含 tool_calls 数组，
+                # 工具结果用 role="tool" + tool_call_id
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {"name": tool_name, "arguments": arguments_str},
+                    }],
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": observation,
+                })
 
         raise MaxStepsError(
             f"步骤 {step.id} 超出最大迭代次数 {max_steps}，强制终止"
@@ -179,6 +210,7 @@ class Executor:
         if tool_use_blocks:
             tb = tool_use_blocks[0]
             data["tool_calls"] = [{
+                "id": tb["id"],
                 "name": tb["name"],
                 "arguments": json.dumps(tb.get("input", {}), ensure_ascii=False),
             }]
@@ -199,11 +231,23 @@ class Executor:
             "messages": full_messages,
         }
         if tools:
-            body["tools"] = tools
+            # Anthropic 格式（input_schema）→ OpenAI 格式（type/function/parameters）
+            body["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "parameters": t.get("input_schema", {}),
+                    },
+                }
+                for t in tools
+            ]
 
+        base = (model_cfg.base_url or "https://api.openai.com/v1").rstrip("/")
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
-                "https://api.openai.com/v1/chat/completions", headers=headers, json=body
+                f"{base}/chat/completions", headers=headers, json=body
             )
             resp.raise_for_status()
             data = resp.json()
@@ -217,6 +261,7 @@ class Executor:
         if msg.get("tool_calls"):
             tc = msg["tool_calls"][0]
             result["tool_calls"] = [{
+                "id": tc.get("id", "call_0"),
                 "name": tc["function"]["name"],
                 "arguments": tc["function"].get("arguments", "{}"),
             }]
@@ -233,9 +278,10 @@ class Executor:
         return ""
 
     @staticmethod
-    def _extract_tool_call(data: dict) -> tuple[str, str] | None:
+    def _extract_tool_call(data: dict) -> tuple[str, str, str] | None:
+        """Returns (name, arguments_str, tool_call_id) or None."""
         tool_calls = data.get("tool_calls")
         if not tool_calls:
             return None
         tc = tool_calls[0]
-        return tc.get("name", ""), tc.get("arguments", "{}")
+        return tc.get("name", ""), tc.get("arguments", "{}"), tc.get("id", "call_0")

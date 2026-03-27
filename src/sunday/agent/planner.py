@@ -92,7 +92,7 @@ class Planner:
         model_cfg = cfg.model
         provider = model_cfg.provider
         model_id = model_cfg.id
-        api_key = self.settings.get_api_key(provider)
+        api_key = self.settings.get_api_key(provider, model_cfg.api_key_env)
 
         thinking_level = state.thinking_level
         budget = THINKING_BUDGET.get(thinking_level, 4096)
@@ -106,7 +106,7 @@ class Planner:
                 prompt, model_id, api_key, model_cfg.max_tokens, budget
             )
         elif provider == "openai":
-            raw = await self._call_openai(prompt, model_id, api_key, model_cfg.max_tokens)
+            raw = await self._call_openai(prompt, model_id, api_key, model_cfg.max_tokens, model_cfg.base_url)
         else:
             raise ValueError(f"Planner 暂不支持 provider: {provider}")
 
@@ -119,7 +119,7 @@ class Planner:
         """局部重规划：替换 failed_step 之后所有未执行步骤。"""
         cfg = self.settings.sunday
         model_cfg = cfg.model
-        api_key = self.settings.get_api_key(model_cfg.provider)
+        api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
 
         completed = [r for r in state.step_results if r.status == StepStatus.DONE]
         completed_summary = "; ".join(f"{r.step_id}: {r.output[:100]}" for r in completed)
@@ -143,12 +143,16 @@ class Planner:
         if model_cfg.provider == "anthropic":
             raw = await self._call_anthropic(prompt, model_cfg.id, api_key, 4096, budget=0)
         elif model_cfg.provider == "openai":
-            raw = await self._call_openai(prompt, model_cfg.id, api_key, 4096)
+            raw = await self._call_openai(prompt, model_cfg.id, api_key, 4096, model_cfg.base_url)
         else:
             raise ValueError(f"Planner 暂不支持 provider: {model_cfg.provider}")
 
         _, plan_text = self._split_thinking(raw)
-        data = json.loads(plan_text.strip())
+        plan_text = self._strip_code_fence(plan_text)
+        if not plan_text:
+            logger.warning("replan LLM 响应为空，将返回空步骤列表")
+            return []
+        data = json.loads(plan_text)
         return [Step(**s) for s in data.get("steps", [])]
 
     # ── 内部 LLM 调用（规划阶段 temperature=0.3，不调用工具） ──────────────
@@ -186,7 +190,8 @@ class Planner:
         return "\n".join(parts)
 
     async def _call_openai(
-        self, prompt: str, model_id: str, api_key: str, max_tokens: int
+        self, prompt: str, model_id: str, api_key: str, max_tokens: int,
+        base_url: str | None = None,
     ) -> str:
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -198,9 +203,10 @@ class Planner:
             "temperature": 0.3,
             "messages": [{"role": "user", "content": prompt}],
         }
+        base = (base_url or "https://api.openai.com/v1").rstrip("/")
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
-                "https://api.openai.com/v1/chat/completions", headers=headers, json=body
+                f"{base}/chat/completions", headers=headers, json=body
             )
             resp.raise_for_status()
             data = resp.json()
@@ -208,23 +214,37 @@ class Planner:
 
     @staticmethod
     def _split_thinking(raw: str) -> tuple[str | None, str]:
-        """将 <thinking>...</thinking> 从输出中分离。"""
-        if "<thinking>" in raw and "</thinking>" in raw:
-            start = raw.index("<thinking>") + len("<thinking>")
-            end = raw.index("</thinking>")
-            thinking = raw[start:end].strip()
-            rest = raw[raw.index("</thinking>") + len("</thinking>"):].strip()
-            return thinking, rest
+        """剥离模型返回的 thinking 块，只保留实际输出内容。
+
+        支持两种格式：
+          - Anthropic extended thinking: <thinking>...</thinking>
+          - DeepSeek / 通用 chain-of-thought: <think>...</think>
+
+        Agent 只需要 thinking 块之后的结构化输出，thinking 本身仅作调试记录。
+        """
+        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("<think>", "</think>")]:
+            if open_tag in raw and close_tag in raw:
+                start = raw.index(open_tag) + len(open_tag)
+                end = raw.index(close_tag)
+                thinking = raw[start:end].strip()
+                rest = raw[raw.index(close_tag) + len(close_tag):].strip()
+                return thinking, rest
         return None, raw
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        """去除 markdown 代码块包装（```json...``` 或 ```...```）。"""
+        text = text.strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+            text = "\n".join(inner).strip()
+        return text
 
     @staticmethod
     def _parse_plan(text: str, thinking: str | None = None) -> Plan:
         """解析 JSON 格式的 Plan，容错处理 markdown 代码块。"""
-        text = text.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
+        text = Planner._strip_code_fence(text)
         data = json.loads(text)
         steps = [Step(**s) for s in data.get("steps", [])]
         return Plan(goal=data.get("goal", ""), thinking=thinking, steps=steps)

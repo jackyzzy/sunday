@@ -183,7 +183,7 @@ class MemoryManager:
 
             cfg = self.settings.sunday
             model_cfg = cfg.model
-            api_key = self.settings.get_api_key(model_cfg.provider)
+            api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
 
             steps_summary = "\n".join(
                 f"- {r.step_id}: {r.output[:300]}"
@@ -267,9 +267,10 @@ class MemoryManager:
             "temperature": 0,
             "messages": [{"role": "user", "content": prompt}],
         }
+        base = (model_cfg.base_url or "https://api.openai.com/v1").rstrip("/")
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                "https://api.openai.com/v1/chat/completions", headers=headers, json=body
+                f"{base}/chat/completions", headers=headers, json=body
             )
             resp.raise_for_status()
             data = resp.json()

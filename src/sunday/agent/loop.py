@@ -119,13 +119,22 @@ class AgentLoop:
                     if verify_result.should_replan:
                         logger.info("步骤 %s 验证失败，触发局部重规划", step.id)
                         await self.emit(state.session_id, "status", {"status": "replanning"})
-                        new_steps = await self.planner.replan(step, result.output, state)
-                        # 替换当前步骤及之后所有步骤
-                        steps = steps[:idx] + new_steps
-                        state.plan.steps = steps
-                        # 不递增 idx，继续执行新的第 idx 步
+                        try:
+                            new_steps = await self.planner.replan(step, result.output, state)
+                        except Exception as replan_err:
+                            logger.warning("局部重规划失败（%s），跳过重规划继续执行", replan_err)
+                            new_steps = []
+                        if new_steps:
+                            # 替换当前步骤及之后所有步骤
+                            steps = steps[:idx] + new_steps
+                            state.plan.steps = steps
+                            # 不递增 idx，继续执行新的第 idx 步
+                            state.step_results.append(result)
+                            continue
+                        # 重规划返回空步骤：记录失败结果，跳出循环
+                        logger.warning("重规划返回空步骤，提前结束执行循环")
                         state.step_results.append(result)
-                        continue
+                        break
 
                 state.step_results.append(result)
                 await self.emit(state.session_id, "step_result", {

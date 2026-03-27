@@ -1,14 +1,54 @@
 agent:
   name: Sunday
-  workspace_dir: ~/.sunday/workspace
-  sessions_dir: ~/.sunday/sessions
+  workspace_dir: .sunday/workspace
+  sessions_dir: .sunday/sessions
 
+# Anthropic
+# model:
+#   provider: anthropic  # anthropic | openai | google | ollama
+#   id: claude-opus-4-5
+#   temperature: 0.2
+#   max_tokens: 8192
+#   base_url: null        # OpenAI 兼容模型填写自定义端点 URL，Anthropic/Google 留 null
+#   api_key_env: null     # 指定 .env 中的变量名（如 DEEPSEEK_API_KEY），null 则按 provider 自动查找
+
+# ── OpenAI 兼容模型示例（取消注释并替换当前 model 块即可切换）──────────────────
+#
+# DeepSeek
 model:
-  provider: anthropic  # anthropic | openai | google | ollama
-  id: claude-opus-4-5
+  provider: openai
+  id: deepseek-chat
   temperature: 0.2
   max_tokens: 8192
-  base_url: null  # 自托管模型（如 Ollama）填写 URL
+  base_url: https://api.deepseek.com/v1
+  api_key_env: DEEPSEEK_API_KEY
+#
+# Qwen（阿里云 DashScope）
+# model:
+#   provider: openai
+#   id: qwen-max
+#   temperature: 0.2
+#   max_tokens: 8192
+#   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+#   api_key_env: QWEN_API_KEY
+#
+# Moonshot
+# model:
+#   provider: openai
+#   id: moonshot-v1-8k
+#   temperature: 0.2
+#   max_tokens: 8192
+#   base_url: https://api.moonshot.cn/v1
+#   api_key_env: MOONSHOT_API_KEY
+#
+# Ollama（本地，无需 key）
+# model:
+#   provider: openai
+#   id: llama3.2
+#   temperature: 0.2
+#   max_tokens: 8192
+#   base_url: http://localhost:11434/v1
+#   api_key_env: null
 
 reasoning:
   max_steps: 10

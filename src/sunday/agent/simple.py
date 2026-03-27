@@ -25,7 +25,7 @@ class SimpleAgent:
             else:
                 model_id = parts[0]
 
-        api_key = self.settings.get_api_key(provider)
+        api_key = self.settings.get_api_key(provider, model_cfg.api_key_env)
 
         if provider == "anthropic":
             return await self._run_anthropic(task, model_id, api_key, model_cfg)
@@ -90,9 +90,10 @@ class SimpleAgent:
             ],
         }
 
+        base = (cfg.base_url or "https://api.openai.com/v1").rstrip("/")
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
-                "https://api.openai.com/v1/chat/completions",
+                f"{base}/chat/completions",
                 headers=headers,
                 json=body,
             )

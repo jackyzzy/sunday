@@ -231,3 +231,125 @@ async def test_replan_returns_new_steps(tmp_path):
     assert len(new) == 1
     assert new[0].id == "step_2_new"
     assert new[0].intent == "换个方法"
+
+
+# ── 新增：_split_thinking / _strip_code_fence / replan 容错 ──────────────────
+
+def test_split_thinking_handles_thinking_tag():
+    """<thinking>...</thinking> 标签被正确剥离"""
+    raw = "<thinking>内部推理过程</thinking>\n{\"steps\": []}"
+    thinking, rest = Planner._split_thinking(raw)
+    assert thinking == "内部推理过程"
+    assert rest == '{"steps": []}'
+
+
+def test_split_thinking_handles_think_tag():
+    """DeepSeek 原生 <think>...</think> 标签被正确剥离"""
+    raw = "<think>chain of thought</think>\n{\"steps\": []}"
+    thinking, rest = Planner._split_thinking(raw)
+    assert thinking == "chain of thought"
+    assert rest == '{"steps": []}'
+
+
+def test_split_thinking_no_tag_returns_raw():
+    """无 thinking 标签时原文返回"""
+    raw = '{"steps": []}'
+    thinking, rest = Planner._split_thinking(raw)
+    assert thinking is None
+    assert rest == raw
+
+
+def test_strip_code_fence_json_block():
+    """去除 ```json...``` 包裹"""
+    text = "```json\n{\"key\": 1}\n```"
+    assert Planner._strip_code_fence(text) == '{"key": 1}'
+
+
+def test_strip_code_fence_plain_block():
+    """去除 ```...``` 包裹（无语言标识符）"""
+    text = "```\n{\"key\": 1}\n```"
+    assert Planner._strip_code_fence(text) == '{"key": 1}'
+
+
+def test_strip_code_fence_no_fence():
+    """无代码块时原文返回"""
+    text = '{"key": 1}'
+    assert Planner._strip_code_fence(text) == text
+
+
+async def test_replan_handles_markdown_wrapped_json(tmp_path):
+    """replan 正确处理 markdown code block 包裹的 JSON"""
+    from sunday.agent.models import Plan, Step, StepResult
+
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings)
+
+    new_steps = [{"id": "step_new", "intent": "替代方案",
+                  "expected_input": "", "expected_output": "",
+                  "success_criteria": "", "depends_on": []}]
+    replan_json = json.dumps({"steps": new_steps})
+    wrapped = f"```json\n{replan_json}\n```"
+    mock_client = _mock_client(_anthropic_text_response(wrapped))
+
+    failed_step = Step(id="s1", intent="失败步骤", status=StepStatus.FAILED)
+    state = AgentState(session_id="s1", task="test")
+    state.plan = Plan(goal="目标", steps=[failed_step])
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        new = await planner.replan(failed_step, "原因", state)
+
+    assert len(new) == 1
+    assert new[0].id == "step_new"
+
+
+async def test_replan_handles_empty_response(tmp_path):
+    """replan 响应为空时返回空列表，不崩溃"""
+    from sunday.agent.models import Plan, Step, StepResult
+
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings)
+
+    mock_client = _mock_client(_anthropic_text_response(""))
+
+    failed_step = Step(id="s1", intent="失败步骤", status=StepStatus.FAILED)
+    state = AgentState(session_id="s1", task="test")
+    state.plan = Plan(goal="目标", steps=[failed_step])
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        new = await planner.replan(failed_step, "原因", state)
+
+    assert new == []
+
+
+async def test_replan_handles_think_tag_before_json(tmp_path):
+    """replan 响应含 <think> 标签时，正确剥离后解析 JSON"""
+    from sunday.agent.models import Plan, Step
+
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings)
+
+    new_steps = [{"id": "step_new", "intent": "替代",
+                  "expected_input": "", "expected_output": "",
+                  "success_criteria": "", "depends_on": []}]
+    plan_json = json.dumps({"steps": new_steps})
+    raw_with_think = f"<think>我需要重新规划一下</think>\n{plan_json}"
+    mock_client = _mock_client(_anthropic_text_response(raw_with_think))
+
+    failed_step = Step(id="s1", intent="步骤", status=StepStatus.FAILED)
+    state = AgentState(session_id="s1", task="test")
+    state.plan = Plan(goal="目标", steps=[failed_step])
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        new = await planner.replan(failed_step, "原因", state)
+
+    assert len(new) == 1
+    assert new[0].id == "step_new"
