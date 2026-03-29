@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -32,41 +32,56 @@ def test_version(runner):
     assert "0.1.0" in result.output
 
 
-# ── 占位命令 ──────────────────────────────────────────────────────────────────
+# ── 真实命令测试（mock 外部依赖） ──────────────────────────────────────────────
 
-def test_tui_placeholder(runner):
-    """sunday tui 输出占位信息，退出码 0"""
-    result = runner.invoke(main, ["tui"])
+def test_tui_starts_app(runner):
+    """sunday tui 正常启动（mock Textual App）"""
+    mock_app = MagicMock()
+    mock_app.run = MagicMock()
+    with patch("sunday.tui.app.SundayApp", return_value=mock_app):
+        result = runner.invoke(main, ["tui"])
     assert result.exit_code == 0
-    assert "TODO" in result.output or "Phase" in result.output
+    mock_app.run.assert_called_once()
 
 
-def test_gateway_start_placeholder(runner):
-    """sunday gateway start 输出占位信息，退出码 0"""
-    result = runner.invoke(main, ["gateway", "start"])
+def test_gateway_start_already_running(runner, tmp_path):
+    """gateway start：已运行时输出提示"""
+    pid_file = tmp_path / "gateway.pid"
+    pid_file.write_text("99999")
+    import os
+    with (
+        patch("sunday.cli._gateway_pid_file", return_value=pid_file),
+        patch("os.kill", return_value=None),
+    ):
+        result = runner.invoke(main, ["gateway", "start"])
     assert result.exit_code == 0
-    assert "TODO" in result.output or "Phase" in result.output
+    assert "已在运行" in result.output or "PID" in result.output
 
 
-def test_gateway_stop_placeholder(runner):
-    """sunday gateway stop 输出占位信息，退出码 0"""
-    result = runner.invoke(main, ["gateway", "stop"])
+def test_gateway_stop_not_running(runner, tmp_path):
+    """gateway stop：未运行时输出提示"""
+    pid_file = tmp_path / "gateway.pid"  # 不存在
+    with patch("sunday.cli._gateway_pid_file", return_value=pid_file):
+        result = runner.invoke(main, ["gateway", "stop"])
     assert result.exit_code == 0
-    assert "TODO" in result.output or "Phase" in result.output
+    assert "未运行" in result.output or "不存在" in result.output
 
 
-def test_gateway_status_placeholder(runner):
-    """sunday gateway status 输出占位信息，退出码 0"""
-    result = runner.invoke(main, ["gateway", "status"])
+def test_gateway_status_not_running(runner, tmp_path):
+    """gateway status：未运行时输出提示"""
+    pid_file = tmp_path / "gateway.pid"  # 不存在
+    with patch("sunday.cli._gateway_pid_file", return_value=pid_file):
+        result = runner.invoke(main, ["gateway", "status"])
     assert result.exit_code == 0
-    assert "TODO" in result.output or "Phase" in result.output
+    assert "未运行" in result.output
 
 
-def test_skills_list_placeholder(runner):
-    """sunday skills list 输出占位信息，退出码 0"""
-    result = runner.invoke(main, ["skills", "list"])
+def test_skills_list_no_skills(runner, tmp_path):
+    """skills list：无技能时输出提示"""
+    with patch("sunday.skills.loader.SkillLoader.discover", return_value=[]):
+        result = runner.invoke(main, ["skills", "list"])
     assert result.exit_code == 0
-    assert "TODO" in result.output or "Phase" in result.output
+    assert "未发现" in result.output or "0" in result.output or result.output
 
 
 # ── sunday run：无 API key 时退出码 1 ──────────────────────────────────────────

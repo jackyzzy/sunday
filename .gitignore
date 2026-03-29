@@ -11,3 +11,5 @@ workspace/memory/
 *.tmp
 cassettes/
 .claude/
+
+todo.md

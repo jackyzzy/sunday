@@ -177,9 +177,10 @@ class MemoryManager:
         失败时仅记录日志，不抛出异常，不影响用户。
         """
         try:
-
             if self.settings is None:
                 return
+
+            from sunday.agent.llm_client import LLMClient
 
             cfg = self.settings.sunday
             model_cfg = cfg.model
@@ -194,13 +195,7 @@ class MemoryManager:
                 steps_summary=steps_summary or "无",
             )
 
-            if model_cfg.provider == "anthropic":
-                raw = await self._call_anthropic_text(prompt, model_cfg, api_key)
-            elif model_cfg.provider == "openai":
-                raw = await self._call_openai_text(prompt, model_cfg, api_key)
-            else:
-                return
-
+            raw = await LLMClient.call_text(model_cfg, api_key, prompt, max_tokens=2048, timeout=60)
             data = self._parse_json_safe(raw)
             if data is None:
                 return
@@ -230,51 +225,6 @@ class MemoryManager:
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(content, encoding="utf-8")
         tmp.rename(path)
-
-    @staticmethod
-    async def _call_anthropic_text(prompt: str, model_cfg, api_key: str) -> str:
-        import httpx
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        body = {
-            "model": model_cfg.id,
-            "max_tokens": 2048,
-            "temperature": 0,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages", headers=headers, json=body
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
-        return "\n".join(texts)
-
-    @staticmethod
-    async def _call_openai_text(prompt: str, model_cfg, api_key: str) -> str:
-        import httpx
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": model_cfg.id,
-            "max_tokens": 2048,
-            "temperature": 0,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        base = (model_cfg.base_url or "https://api.openai.com/v1").rstrip("/")
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{base}/chat/completions", headers=headers, json=body
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        return data["choices"][0]["message"]["content"]
 
     @staticmethod
     def _parse_json_safe(raw: str) -> dict | None:

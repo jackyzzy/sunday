@@ -125,11 +125,18 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
         )
         workspace_dir = cfg_settings.sunday.agent.workspace_dir
 
-        # CLI 确认处理器：stdin 读取 y/n
+        # CLI 确认处理器：stdin 读取 y/n；非交互模式自动拒绝
         async def cli_confirm(tool_name: str, arguments: dict, session_id: str) -> bool:
             click.echo(f"\n⚠️  工具 '{tool_name}' 是不可逆操作，参数：{arguments}")
-            answer = click.prompt("是否继续执行？[y/N]", default="N")
-            return answer.strip().lower() in ("y", "yes")
+            import sys
+            if not sys.stdin.isatty():
+                click.echo("非交互模式，自动拒绝不可逆操作。", err=True)
+                return False
+            try:
+                answer = click.prompt("是否继续执行？[y/N]", default="N")
+                return answer.strip().lower() in ("y", "yes")
+            except click.exceptions.Abort:
+                return False
 
         # 工具注册表
         registry = ToolRegistry(cfg_settings, confirmation_handler=cli_confirm)

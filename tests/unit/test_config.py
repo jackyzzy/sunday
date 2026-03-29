@@ -23,7 +23,7 @@ def test_sunday_config_defaults(tmp_path):
         cfg = s.sunday
         assert cfg.agent.name == "TestSunday"
         assert cfg.model.provider == "anthropic"
-        assert cfg.reasoning.max_steps == 10  # 默认值
+        assert cfg.reasoning.max_steps == 15  # 默认值（ReasoningConfig 类默认）
         assert cfg.memory.log_retention_days == 30  # 默认值
 
 

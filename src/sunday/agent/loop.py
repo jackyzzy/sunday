@@ -71,6 +71,8 @@ class AgentLoop:
             # EXECUTE + VERIFY（串行，按依赖顺序）
             steps = list(plan.steps)
             idx = 0
+            replan_count = 0
+            max_replans = 3
             while idx < len(steps):
                 step = steps[idx]
 
@@ -89,17 +91,6 @@ class AgentLoop:
                     result = await self.executor.run(step, state)
                 except (MaxStepsError, RepetitionError) as e:
                     logger.warning("步骤 %s 执行异常：%s", step.id, e)
-                    result = type(
-                        "StepResult", (),
-                        {
-                            "step_id": step.id,
-                            "status": StepStatus.FAILED,
-                            "output": str(e),
-                            "react_iterations": [],
-                            "verified": False,
-                            "verify_reason": "",
-                        }
-                    )()
                     from sunday.agent.models import StepResult
                     result = StepResult(
                         step_id=step.id,
@@ -116,8 +107,10 @@ class AgentLoop:
                     step.status = StepStatus.DONE
                 else:
                     step.status = StepStatus.FAILED
-                    if verify_result.should_replan:
-                        logger.info("步骤 %s 验证失败，触发局部重规划", step.id)
+                    if verify_result.should_replan and replan_count < max_replans:
+                        replan_count += 1
+                        logger.info("步骤 %s 验证失败，触发局部重规划（第 %d/%d 次）",
+                                    step.id, replan_count, max_replans)
                         await self.emit(state.session_id, "status", {"status": "replanning"})
                         try:
                             new_steps = await self.planner.replan(step, result.output, state)
@@ -135,6 +128,9 @@ class AgentLoop:
                         logger.warning("重规划返回空步骤，提前结束执行循环")
                         state.step_results.append(result)
                         break
+                    elif verify_result.should_replan:
+                        logger.warning("步骤 %s 验证失败，已达重规划上限 %d，继续执行后续步骤",
+                                       step.id, max_replans)
 
                 state.step_results.append(result)
                 await self.emit(state.session_id, "step_result", {

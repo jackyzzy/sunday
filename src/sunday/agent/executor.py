@@ -5,8 +5,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Protocol
 
-import httpx
-
+from sunday.agent.llm_client import LLMClient
 from sunday.agent.models import (
     AgentState,
     ReactIteration,
@@ -190,115 +189,17 @@ class Executor:
     async def _call_llm(
         self, system: str, messages: list, tools: list, model_cfg, api_key: str
     ) -> dict:
-        if model_cfg.provider == "anthropic":
-            return await self._call_anthropic(system, messages, tools, model_cfg, api_key)
-        elif model_cfg.provider == "openai":
-            return await self._call_openai(system, messages, tools, model_cfg, api_key)
-        else:
-            raise ValueError(f"Executor 暂不支持 provider: {model_cfg.provider}")
-
-    async def _call_anthropic(
-        self, system: str, messages: list, tools: list, model_cfg, api_key: str
-    ) -> dict:
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        body: dict = {
-            "model": model_cfg.id,
-            "max_tokens": model_cfg.max_tokens,
-            "temperature": 0,
-            "system": system,
-            "messages": messages,
-        }
-        if tools:
-            body["tools"] = tools
-
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages", headers=headers, json=body
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        # 统一格式：判断是否有工具调用
-        tool_use_blocks = [b for b in data.get("content", []) if b.get("type") == "tool_use"]
-        if tool_use_blocks:
-            tb = tool_use_blocks[0]
-            data["tool_calls"] = [{
-                "id": tb["id"],
-                "name": tb["name"],
-                "arguments": json.dumps(tb.get("input", {}), ensure_ascii=False),
-            }]
-        return data
-
-    async def _call_openai(
-        self, system: str, messages: list, tools: list, model_cfg, api_key: str
-    ) -> dict:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        full_messages = [{"role": "system", "content": system}] + messages
-        body: dict = {
-            "model": model_cfg.id,
-            "max_tokens": model_cfg.max_tokens,
-            "temperature": 0,
-            "messages": full_messages,
-        }
-        if tools:
-            # Anthropic 格式（input_schema）→ OpenAI 格式（type/function/parameters）
-            body["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t["description"],
-                        "parameters": t.get("input_schema", {}),
-                    },
-                }
-                for t in tools
-            ]
-
-        base = (model_cfg.base_url or "https://api.openai.com/v1").rstrip("/")
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                f"{base}/chat/completions", headers=headers, json=body
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        choice = data["choices"][0]
-        msg = choice["message"]
-        result: dict = {
-            "finish_reason": choice["finish_reason"],
-            "content": [{"type": "text", "text": msg.get("content") or ""}],
-        }
-        if msg.get("tool_calls"):
-            tc = msg["tool_calls"][0]
-            result["tool_calls"] = [{
-                "id": tc.get("id", "call_0"),
-                "name": tc["function"]["name"],
-                "arguments": tc["function"].get("arguments", "{}"),
-            }]
-        return result
+        return await LLMClient.call(
+            model_cfg, api_key, messages,
+            system=system,
+            tools=tools or None,
+            temperature=0,
+        )
 
     @staticmethod
     def _extract_text(data: dict) -> str:
-        for block in data.get("content", []):
-            if isinstance(block, dict) and block.get("type") == "text":
-                return block.get("text", "")
-        # OpenAI 格式兜底
-        if "choices" in data:
-            return data["choices"][0]["message"].get("content") or ""
-        return ""
+        return LLMClient.extract_text(data)
 
     @staticmethod
     def _extract_tool_call(data: dict) -> tuple[str, str, str] | None:
-        """Returns (name, arguments_str, tool_call_id) or None."""
-        tool_calls = data.get("tool_calls")
-        if not tool_calls:
-            return None
-        tc = tool_calls[0]
-        return tc.get("name", ""), tc.get("arguments", "{}"), tc.get("id", "call_0")
+        return LLMClient.extract_tool_call(data)

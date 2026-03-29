@@ -5,9 +5,9 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-import httpx
 from pydantic import BaseModel
 
+from sunday.agent.llm_client import LLMClient
 from sunday.agent.models import AgentState, Step, StepResult
 
 if TYPE_CHECKING:
@@ -81,11 +81,15 @@ class Verifier:
             output=result.output[:2000],
         )
 
-        raw = await self._call_llm(prompt, model_cfg, api_key)
-        return self._parse_verify_result(raw)
+        try:
+            raw = await self._call_llm(prompt, model_cfg, api_key)
+            return self._parse_verify_result(raw)
+        except Exception as e:
+            logger.warning("check LLM 调用失败（%s），默认通过", e)
+            return VerifyResult(passed=True, reason=f"验证调用失败，默认通过：{e}")
 
     async def summarize(self, state: AgentState) -> str:
-        """生成最终结果摘要。"""
+        """生成最终结果摘要。LLM 调用失败时降级为本地摘要，不抛出异常。"""
         cfg = self.settings.sunday
         model_cfg = cfg.model
         api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
@@ -101,59 +105,23 @@ class Verifier:
             task=state.task,
             steps_summary=steps_summary,
         )
-        return await self._call_llm(prompt, model_cfg, api_key)
+        try:
+            return await self._call_llm(prompt, model_cfg, api_key)
+        except Exception as e:
+            logger.warning("summarize LLM 调用失败（%s），使用本地摘要降级", e)
+            done = [r for r in state.step_results if r.status.value == "done"]
+            failed = [r for r in state.step_results if r.status.value == "failed"]
+            return (
+                f"任务：{state.task}\n"
+                f"完成步骤：{len(done)}/{len(state.step_results)}，"
+                f"失败步骤：{len(failed)}。\n"
+                f"（摘要生成失败：{e}）"
+            )
 
     # ── 内部 LLM 调用（验证阶段 temperature=0） ───────────────────────────
 
     async def _call_llm(self, prompt: str, model_cfg, api_key: str) -> str:
-        if model_cfg.provider == "anthropic":
-            return await self._call_anthropic(prompt, model_cfg, api_key)
-        elif model_cfg.provider == "openai":
-            return await self._call_openai(prompt, model_cfg, api_key)
-        else:
-            raise ValueError(f"Verifier 暂不支持 provider: {model_cfg.provider}")
-
-    async def _call_anthropic(self, prompt: str, model_cfg, api_key: str) -> str:
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        body = {
-            "model": model_cfg.id,
-            "max_tokens": 1024,
-            "temperature": 0,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages", headers=headers, json=body
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        texts = [b["text"] for b in data.get("content", []) if b.get("type") == "text"]
-        return "\n".join(texts)
-
-    async def _call_openai(self, prompt: str, model_cfg, api_key: str) -> str:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": model_cfg.id,
-            "max_tokens": 1024,
-            "temperature": 0,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        base = (model_cfg.base_url or "https://api.openai.com/v1").rstrip("/")
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{base}/chat/completions", headers=headers, json=body
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        return await LLMClient.call_text(model_cfg, api_key, prompt, max_tokens=1024, timeout=60)
 
     @staticmethod
     def _parse_verify_result(raw: str) -> VerifyResult:

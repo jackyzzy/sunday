@@ -5,8 +5,7 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-import httpx
-
+from sunday.agent.llm_client import LLMClient
 from sunday.agent.models import AgentState, Plan, Step, StepStatus, ThinkingLevel
 
 if TYPE_CHECKING:
@@ -90,27 +89,23 @@ class Planner:
         """根据任务和上下文生成结构化 Plan。"""
         cfg = self.settings.sunday
         model_cfg = cfg.model
-        provider = model_cfg.provider
-        model_id = model_cfg.id
-        api_key = self.settings.get_api_key(provider, model_cfg.api_key_env)
+        api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
 
-        thinking_level = state.thinking_level
-        budget = THINKING_BUDGET.get(thinking_level, 4096)
+        budget = THINKING_BUDGET.get(state.thinking_level, 4096)
 
-        # 将 system_prompt（L0 上下文）追加到规划提示前
         task_context = f"{self.system_prompt}\n\n---\n\n" if self.system_prompt else ""
         prompt = task_context + _PLAN_PROMPT.format(task=state.task)
 
-        if provider == "anthropic":
-            raw = await self._call_anthropic(
-                prompt, model_id, api_key, model_cfg.max_tokens, budget
-            )
-        elif provider == "openai":
-            raw = await self._call_openai(prompt, model_id, api_key, model_cfg.max_tokens, model_cfg.base_url)
-        else:
-            raise ValueError(f"Planner 暂不支持 provider: {provider}")
+        messages = [{"role": "user", "content": prompt}]
+        data = await LLMClient.call(
+            model_cfg, api_key, messages,
+            max_tokens=model_cfg.max_tokens,
+            temperature=0.3,
+            thinking_budget=budget,
+        )
 
-        thinking_text, plan_text = self._split_thinking(raw)
+        thinking_text = data.get("thinking")
+        plan_text = LLMClient.extract_text(data)
         plan = self._parse_plan(plan_text, thinking=thinking_text)
         logger.info("规划完成，共 %d 个步骤", len(plan.steps))
         return plan
@@ -140,96 +135,15 @@ class Planner:
             remaining_steps=json.dumps(remaining, ensure_ascii=False),
         )
 
-        if model_cfg.provider == "anthropic":
-            raw = await self._call_anthropic(prompt, model_cfg.id, api_key, 4096, budget=0)
-        elif model_cfg.provider == "openai":
-            raw = await self._call_openai(prompt, model_cfg.id, api_key, 4096, model_cfg.base_url)
-        else:
-            raise ValueError(f"Planner 暂不支持 provider: {model_cfg.provider}")
-
-        _, plan_text = self._split_thinking(raw)
-        plan_text = self._strip_code_fence(plan_text)
+        raw = await LLMClient.call_text(
+            model_cfg, api_key, prompt, max_tokens=4096, temperature=0.3
+        )
+        plan_text = self._strip_code_fence(raw)
         if not plan_text:
             logger.warning("replan LLM 响应为空，将返回空步骤列表")
             return []
         data = json.loads(plan_text)
         return [Step(**s) for s in data.get("steps", [])]
-
-    # ── 内部 LLM 调用（规划阶段 temperature=0.3，不调用工具） ──────────────
-
-    async def _call_anthropic(
-        self, prompt: str, model_id: str, api_key: str, max_tokens: int, budget: int
-    ) -> str:
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        body: dict = {
-            "model": model_id,
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if budget > 0:
-            body["thinking"] = {"type": "enabled", "budget_tokens": budget}
-
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages", headers=headers, json=body
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        parts = []
-        for block in data.get("content", []):
-            if block.get("type") == "thinking":
-                parts.append(f"<thinking>{block.get('thinking', '')}</thinking>")
-            elif block.get("type") == "text":
-                parts.append(block.get("text", ""))
-        return "\n".join(parts)
-
-    async def _call_openai(
-        self, prompt: str, model_id: str, api_key: str, max_tokens: int,
-        base_url: str | None = None,
-    ) -> str:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": model_id,
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        base = (base_url or "https://api.openai.com/v1").rstrip("/")
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                f"{base}/chat/completions", headers=headers, json=body
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        return data["choices"][0]["message"]["content"]
-
-    @staticmethod
-    def _split_thinking(raw: str) -> tuple[str | None, str]:
-        """剥离模型返回的 thinking 块，只保留实际输出内容。
-
-        支持两种格式：
-          - Anthropic extended thinking: <thinking>...</thinking>
-          - DeepSeek / 通用 chain-of-thought: <think>...</think>
-
-        Agent 只需要 thinking 块之后的结构化输出，thinking 本身仅作调试记录。
-        """
-        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("<think>", "</think>")]:
-            if open_tag in raw and close_tag in raw:
-                start = raw.index(open_tag) + len(open_tag)
-                end = raw.index(close_tag)
-                thinking = raw[start:end].strip()
-                rest = raw[raw.index(close_tag) + len(close_tag):].strip()
-                return thinking, rest
-        return None, raw
 
     @staticmethod
     def _strip_code_fence(text: str) -> str:

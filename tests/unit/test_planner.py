@@ -237,24 +237,27 @@ async def test_replan_returns_new_steps(tmp_path):
 
 def test_split_thinking_handles_thinking_tag():
     """<thinking>...</thinking> 标签被正确剥离"""
+    from sunday.agent.llm_client import LLMClient
     raw = "<thinking>内部推理过程</thinking>\n{\"steps\": []}"
-    thinking, rest = Planner._split_thinking(raw)
+    thinking, rest = LLMClient.split_thinking(raw)
     assert thinking == "内部推理过程"
     assert rest == '{"steps": []}'
 
 
 def test_split_thinking_handles_think_tag():
     """DeepSeek 原生 <think>...</think> 标签被正确剥离"""
+    from sunday.agent.llm_client import LLMClient
     raw = "<think>chain of thought</think>\n{\"steps\": []}"
-    thinking, rest = Planner._split_thinking(raw)
+    thinking, rest = LLMClient.split_thinking(raw)
     assert thinking == "chain of thought"
     assert rest == '{"steps": []}'
 
 
 def test_split_thinking_no_tag_returns_raw():
     """无 thinking 标签时原文返回"""
+    from sunday.agent.llm_client import LLMClient
     raw = '{"steps": []}'
-    thinking, rest = Planner._split_thinking(raw)
+    thinking, rest = LLMClient.split_thinking(raw)
     assert thinking is None
     assert rest == raw
 

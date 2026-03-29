@@ -134,8 +134,8 @@ async def test_run_with_tool_then_stop(tmp_path):
 
 # ── MaxStepsError ─────────────────────────────────────────────────────────────
 
-async def test_max_steps_raises(tmp_path):
-    """超过 max_steps 时抛出 MaxStepsError"""
+async def test_max_steps_forced_finish(tmp_path):
+    """超过 max_steps 时强制收尾输出（不抛异常），状态为 DONE"""
     settings = _make_settings(tmp_path)  # max_steps=3
 
     mock_registry = MagicMock()
@@ -143,11 +143,10 @@ async def test_max_steps_raises(tmp_path):
     mock_registry.execute = AsyncMock(return_value="result")
     executor = Executor(settings, tool_registry=mock_registry)
 
-    # 每次都返回工具调用，且每次参数不同（避免 RepetitionError）
+    # 前 max_steps-1 次返回工具调用，最后一次返回文本（强制收尾）
     def make_tool_response(i):
         return _anthropic_tool_use_response("foo", {"n": i})
 
-    # 需要 max_steps+1 次响应（最后一次不会执行），提供足够多
     responses = [make_tool_response(i) for i in range(10)]
     mock_client = _mock_http_client(responses)
 
@@ -158,8 +157,10 @@ async def test_max_steps_raises(tmp_path):
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
         patch("httpx.AsyncClient", return_value=mock_client),
     ):
-        with pytest.raises(MaxStepsError):
-            await executor.run(step, state)
+        result = await executor.run(step, state)
+
+    assert result.status == StepStatus.DONE
+    assert result.step_id == "s1"
 
 
 # ── RepetitionError ───────────────────────────────────────────────────────────
