@@ -80,11 +80,13 @@ class AgentConfig(BaseModel):
     name: str = "Sunday"
     workspace_dir: Path = Path("~/.sunday/workspace")
     sessions_dir: Path = Path("~/.sunday/sessions")
+    report_dir: Path = Path("~/.sunday/reports")
 
     def model_post_init(self, __context: Any) -> None:
         # 展开 ~ 路径
         self.workspace_dir = Path(os.path.expanduser(self.workspace_dir))
         self.sessions_dir = Path(os.path.expanduser(self.sessions_dir))
+        self.report_dir = Path(os.path.expanduser(self.report_dir))
 
 
 class TaskConfig(BaseModel):

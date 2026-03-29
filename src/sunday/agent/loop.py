@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from sunday.agent.executor import Executor, MaxStepsError, RepetitionError
@@ -41,6 +42,7 @@ class AgentLoop:
         emit: EmitCallable | None = None,
         context_builder: "ContextBuilder | None" = None,
         memory_manager: "MemoryManager | None" = None,
+        report_dir: "Path | None" = None,
     ) -> None:
         self.planner = planner
         self.executor = executor
@@ -48,6 +50,7 @@ class AgentLoop:
         self.emit = emit or _noop_emit
         self.context_builder = context_builder
         self.memory_manager = memory_manager
+        self.report_dir = report_dir
 
     async def run(self, state: AgentState) -> str:
         """执行完整的 think→plan→execute→verify 循环，返回最终摘要。"""
@@ -144,6 +147,16 @@ class AgentLoop:
             await self.emit(state.session_id, "status", {"status": "summarizing"})
             summary = await self.verifier.summarize(state)
             await self.emit(state.session_id, "status", {"status": "idle"})
+
+            # 落盘到 report_dir
+            if self.report_dir is not None:
+                self.report_dir.mkdir(parents=True, exist_ok=True)
+                (self.report_dir / "summary.md").write_text(summary, encoding="utf-8")
+                lines: list[str] = []
+                for r in state.step_results:
+                    lines += [f"## {r.step_id} — {r.status.value}", r.output or "", ""]
+                (self.report_dir / "steps.md").write_text("\n".join(lines), encoding="utf-8")
+                logger.debug("报告已写入：%s", self.report_dir)
 
             # 记忆整合（Phase 3+）
             if self.memory_manager is not None:

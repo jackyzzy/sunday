@@ -124,7 +124,7 @@ class Gateway:
                 if self._mock_loop_run is not None:
                     result = await self._mock_loop_run(state)
                 else:
-                    loop = self._build_agent_loop(session_id)
+                    loop = self._build_agent_loop(session_id, task=content)
                     result = await loop.run(state)
                 await self.emit(session_id, EventType.DONE, {"content": result or ""})
             except asyncio.CancelledError:
@@ -213,7 +213,7 @@ class Gateway:
 
     # ── 私有构建方法 ──────────────────────────────────────────────────────
 
-    def _build_agent_loop(self, session_id: str):
+    def _build_agent_loop(self, session_id: str, task: str = ""):
         """构建完整 AgentLoop（注入所有依赖）。"""
         from sunday.agent.executor import Executor
         from sunday.agent.loop import AgentLoop
@@ -222,17 +222,19 @@ class Gateway:
         from sunday.memory.context import ContextBuilder
         from sunday.memory.manager import MemoryManager
         from sunday.skills.loader import SkillLoader
-        from sunday.tools.cli_tool import register_cli_tools
+        from sunday.tools.cli_tool import make_session_report_dir, register_cli_tools
         from sunday.tools.registry import ToolRegistry
 
         cfg = self._settings
         workspace_dir = cfg.sunday.agent.workspace_dir
+        base_report_dir = cfg.sunday.agent.report_dir
+        session_report_dir = make_session_report_dir(base_report_dir, task, session_id)
 
         async def gw_confirm(tool_name: str, arguments: dict, _sid: str) -> bool:
             return await self.request_confirm(tool_name, arguments, session_id)
 
         registry = ToolRegistry(cfg, confirmation_handler=gw_confirm)
-        register_cli_tools(registry)
+        register_cli_tools(registry, report_dir=session_report_dir)
 
         skill_loader = SkillLoader(
             project_skills_dir=workspace_dir.parent.parent / "skills",
@@ -253,4 +255,5 @@ class Gateway:
             emit=loop_emit,
             context_builder=context_builder,
             memory_manager=memory_manager,
+            report_dir=session_report_dir,
         )

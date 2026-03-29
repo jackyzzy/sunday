@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -92,8 +93,28 @@ async def search_files(directory: str, pattern: str) -> str:
         return f"[错误] 搜索文件失败：{e}"
 
 
-def register_cli_tools(registry: "ToolRegistry") -> None:
-    """注册所有 CLI 和文件工具到 ToolRegistry。"""
+def make_session_report_dir(base_dir: Path, task: str, session_id: str) -> Path:
+    """根据任务首句生成可读目录名，格式：{task_slug}_{session_id[:6]}"""
+    slug = re.sub(r'[^\w\u4e00-\u9fff]+', '_', task[:40]).strip('_') or "task"
+    return base_dir / f"{slug}_{session_id[:6]}"
+
+
+def register_cli_tools(registry: "ToolRegistry", report_dir: "Path | None" = None) -> None:
+    """注册所有 CLI 和文件工具到 ToolRegistry。
+
+    report_dir: 若指定，write_file 的相对路径将自动解析到该目录。
+    """
+    if report_dir is not None:
+        async def _write_file(path: str, content: str) -> str:
+            p = Path(path)
+            if not p.is_absolute():
+                p = report_dir / p
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+            return f"已写入：{p}"
+    else:
+        _write_file = write_file
+
     tools = [
         (
             ToolMeta(
@@ -129,11 +150,11 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
         (
             ToolMeta(
                 name="write_file",
-                description="写入内容到本地文件（覆盖）。",
+                description="写入内容到文件（覆盖）。相对路径自动保存至当前任务报告目录。",
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "文件路径"},
+                        "path": {"type": "string", "description": "文件路径（只需文件名即可，如 report.md）"},
                         "content": {"type": "string", "description": "文件内容"},
                     },
                     "required": ["path", "content"],
@@ -141,7 +162,7 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
                 is_dangerous=True,  # 覆盖写入视为危险操作
                 timeout=10,
             ),
-            write_file,
+            _write_file,
         ),
         (
             ToolMeta(

@@ -63,7 +63,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
     from sunday.memory.context import ContextBuilder
     from sunday.memory.manager import MemoryManager
     from sunday.skills.loader import SkillLoader
-    from sunday.tools.cli_tool import register_cli_tools
+    from sunday.tools.cli_tool import make_session_report_dir, register_cli_tools
     from sunday.tools.registry import ToolRegistry
 
     # 如果指定了 model_override，临时调整 settings
@@ -139,8 +139,10 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
                 return False
 
         # 工具注册表
+        base_report_dir = cfg_settings.sunday.agent.report_dir
+        session_report_dir = make_session_report_dir(base_report_dir, task, state.session_id)
         registry = ToolRegistry(cfg_settings, confirmation_handler=cli_confirm)
-        register_cli_tools(registry)
+        register_cli_tools(registry, report_dir=session_report_dir)
 
         # 技能加载器（注入 ContextBuilder 用于 L0 摘要）
         skill_loader = SkillLoader(
@@ -158,6 +160,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
             emit=cli_emit,
             context_builder=context_builder,
             memory_manager=memory_manager,
+            report_dir=session_report_dir,
         )
         result = await loop.run(state)
         click.echo("\n" + "─" * 50)

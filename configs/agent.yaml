@@ -2,6 +2,7 @@ agent:
   name: Sunday
   workspace_dir: .sunday/workspace
   sessions_dir: .sunday/sessions
+  report_dir: .sunday/reports
 
 # Anthropic
 # model:

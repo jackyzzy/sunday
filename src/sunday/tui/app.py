@@ -44,8 +44,11 @@ class SundayApp(App):
         self.gateway_url = gateway_url
         self.auto_connect = auto_connect
         self.session_id: str = str(uuid.uuid4())
-        self.thinking_level: str = "medium"
+        # 从配置读取初始值
+        from sunday.config import settings
+        self.thinking_level: str = settings.sunday.reasoning.thinking_level
         self.model_override: str | None = None
+        self._model_id: str = settings.sunday.model.id
         self._ws = None
         self._slash_handler: SlashCommandHandler | None = None
         # 等待确认的 Future
@@ -55,7 +58,11 @@ class SundayApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        yield Label("Session: --  │  Think: medium  │  Model: default", id="info-bar")
+        sid_short = self.session_id[:8]
+        yield Label(
+            f"Session: {sid_short}  │  Think: {self.thinking_level}  │  Model: {self._model_id}",
+            id="info-bar",
+        )
         yield ChatLog()
         yield StatusBar()
         yield InputBar()
@@ -142,6 +149,7 @@ class SundayApp(App):
             if cmd == "new":
                 new_sid = payload.get("new_session_id", "")
                 self.session_id = new_sid
+                self._refresh_info_bar()
                 chat.add_system_message(f"新会话已创建：{new_sid}")
             elif cmd == "sessions":
                 sessions = payload.get("sessions", [])
@@ -178,6 +186,17 @@ class SundayApp(App):
                 await self._ws.send(msg.to_json())
             except Exception as e:
                 self.query_one(ChatLog).add_error_message(f"发送失败：{e}")
+
+    def _refresh_info_bar(self) -> None:
+        """同步 info-bar 显示的 session/think/model 信息。"""
+        sid_short = self.session_id[:8]
+        model_display = self.model_override or self._model_id
+        try:
+            self.query_one("#info-bar", Label).update(
+                f"Session: {sid_short}  │  Think: {self.thinking_level}  │  Model: {model_display}"
+            )
+        except Exception:
+            pass
 
     # ── 快捷键 Action ─────────────────────────────────────────────────────
 
