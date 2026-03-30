@@ -141,6 +141,8 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
         # 工具注册表
         registry = ToolRegistry(cfg, confirmation_handler=cli_confirm)
         register_cli_tools(registry)
+        from sunday.tools.local_loader import load_user_tools
+        load_user_tools(cfg.agent.workspace_dir, registry)
 
         # 技能加载器（注入 ContextBuilder 用于 L0 摘要）
         workspace_dir = cfg.agent.workspace_dir

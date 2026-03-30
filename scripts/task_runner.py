@@ -79,6 +79,8 @@ class TaskRunner:
 
         registry = ToolRegistry(cfg, confirmation_handler=_cli_confirm)
         register_cli_tools(registry)
+        from sunday.tools.local_loader import load_user_tools
+        load_user_tools(workspace_dir, registry)
 
         skill_loader = SkillLoader(
             project_skills_dir=Path(__file__).parent.parent / "skills",
