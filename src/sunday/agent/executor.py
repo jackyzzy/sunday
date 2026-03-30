@@ -64,7 +64,24 @@ class Executor:
         self.tool_registry = tool_registry
 
     async def run(self, step: Step, state: AgentState) -> StepResult:
-        """执行单个步骤，返回 StepResult。"""
+        """执行单个步骤，返回 StepResult。网络错误转为 FAILED 结果，不向上传播。"""
+        try:
+            return await self._run_inner(step, state)
+        except Exception as e:
+            import httpx
+            if isinstance(e, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
+                msg = f"网络连接失败：{type(e).__name__}（请检查网络或代理配置）"
+            else:
+                raise
+            logger.error("步骤 %s LLM 调用失败：%s", step.id, msg)
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.FAILED,
+                output=msg,
+            )
+
+    async def _run_inner(self, step: Step, state: AgentState) -> StepResult:
+        """实际执行逻辑（由 run() 包裹以统一捕获网络异常）。"""
         model_cfg = self.config.model
         max_steps = self.config.reasoning.max_steps
         api_key = model_cfg.get_api_key()

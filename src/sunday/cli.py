@@ -165,7 +165,11 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
         click.echo("\n" + "─" * 50)
         click.echo(result)
     except Exception as e:
-        click.echo(f"执行失败：{e}", err=True)
+        import httpx
+        if isinstance(e, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
+            click.echo(f"执行失败：网络连接失败（{type(e).__name__}），请检查网络或代理配置", err=True)
+        else:
+            click.echo(f"执行失败：{e or type(e).__name__}", err=True)
         raise SystemExit(1)
 
 

@@ -131,8 +131,14 @@ class Gateway:
                 await self.emit(session_id, EventType.STATUS, {"state": "aborted"})
                 raise
             except Exception as e:
-                logger.exception("AgentLoop 异常：%s", e)
-                await self.emit(session_id, EventType.ERROR, {"message": str(e)})
+                import httpx
+                if isinstance(e, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
+                    msg = f"网络连接失败（{type(e).__name__}），请检查网络或代理配置"
+                    logger.error("AgentLoop 网络异常：%s", msg)
+                else:
+                    msg = str(e) or type(e).__name__
+                    logger.exception("AgentLoop 异常：%s", e)
+                await self.emit(session_id, EventType.ERROR, {"message": msg})
             finally:
                 self._running_tasks.pop(session_id, None)
 
