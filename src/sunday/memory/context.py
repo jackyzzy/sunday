@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from sunday.config import SundayConfig
 
 
 class SkillLoaderProtocol(Protocol):
@@ -42,12 +45,13 @@ class ContextBuilder:
         self,
         workspace_dir: Path,
         skill_loader: SkillLoaderProtocol | None = None,
+        config: "SundayConfig | None" = None,
         l0_max_lines: int = 100,
     ) -> None:
         self.workspace_dir = workspace_dir
         self.memory_dir = workspace_dir / "memory"
         self.skill_loader = skill_loader
-        self.l0_max_lines = l0_max_lines
+        self.l0_max_lines = config.memory.l0_max_lines if config else l0_max_lines
 
     def build(self, session_id: str = "") -> Context:
         """组装 L0 系统提示，返回 Context。"""

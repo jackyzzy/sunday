@@ -63,7 +63,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
     from sunday.memory.context import ContextBuilder
     from sunday.memory.manager import MemoryManager
     from sunday.skills.loader import SkillLoader
-    from sunday.tools.cli_tool import make_session_report_dir, register_cli_tools
+    from sunday.tools.cli_tool import register_cli_tools
     from sunday.tools.registry import ToolRegistry
 
     # 如果指定了 model_override，临时调整 settings
@@ -90,7 +90,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
     click.echo("─" * 50)
 
     try:
-        cfg_settings.get_api_key(cfg_settings.sunday.model.provider, cfg_settings.sunday.model.api_key_env)
+        cfg_settings.sunday.model.get_api_key()
     except (ValueError, KeyError) as e:
         click.echo(f"配置错误：{e}", err=True)
         click.echo("请检查 .env 文件中的 API key 配置", err=True)
@@ -123,7 +123,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
             task=task,
             thinking_level=level,
         )
-        workspace_dir = cfg_settings.sunday.agent.workspace_dir
+        cfg = cfg_settings.sunday  # SundayConfig
 
         # CLI 确认处理器：stdin 读取 y/n；非交互模式自动拒绝
         async def cli_confirm(tool_name: str, arguments: dict, session_id: str) -> bool:
@@ -139,28 +139,27 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
                 return False
 
         # 工具注册表
-        base_report_dir = cfg_settings.sunday.agent.report_dir
-        session_report_dir = make_session_report_dir(base_report_dir, task, state.session_id)
-        registry = ToolRegistry(cfg_settings, confirmation_handler=cli_confirm)
-        register_cli_tools(registry, report_dir=session_report_dir)
+        registry = ToolRegistry(cfg, confirmation_handler=cli_confirm)
+        register_cli_tools(registry)
 
         # 技能加载器（注入 ContextBuilder 用于 L0 摘要）
+        workspace_dir = cfg.agent.workspace_dir
         skill_loader = SkillLoader(
             project_skills_dir=workspace_dir.parent.parent / "skills",
             user_skills_dir=workspace_dir / "skills",
         )
         skill_loader.discover()
 
-        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader)
-        memory_manager = MemoryManager(workspace_dir, cfg_settings)
+        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader, config=cfg)
+        memory_manager = MemoryManager(workspace_dir, config=cfg)
         loop = AgentLoop(
-            planner=Planner(cfg_settings),
-            executor=Executor(cfg_settings, tool_registry=registry),
-            verifier=Verifier(cfg_settings),
+            planner=Planner(cfg),
+            executor=Executor(cfg, tool_registry=registry),
+            verifier=Verifier(cfg),
             emit=cli_emit,
             context_builder=context_builder,
             memory_manager=memory_manager,
-            report_dir=session_report_dir,
+            config=cfg,
         )
         result = await loop.run(state)
         click.echo("\n" + "─" * 50)

@@ -99,21 +99,18 @@ def make_session_report_dir(base_dir: Path, task: str, session_id: str) -> Path:
     return base_dir / f"{slug}_{session_id[:6]}"
 
 
-def register_cli_tools(registry: "ToolRegistry", report_dir: "Path | None" = None) -> None:
+def register_cli_tools(registry: "ToolRegistry") -> None:
     """注册所有 CLI 和文件工具到 ToolRegistry。
 
-    report_dir: 若指定，write_file 的相对路径将自动解析到该目录。
+    write_file 的相对路径路由由 registry._report_dir 控制（AgentLoop.run() 在任务开始时设置）。
     """
-    if report_dir is not None:
-        async def _write_file(path: str, content: str) -> str:
-            p = Path(path)
-            if not p.is_absolute():
-                p = report_dir / p
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
-            return f"已写入：{p}"
-    else:
-        _write_file = write_file
+    async def _write_file(path: str, content: str) -> str:
+        p = Path(path)
+        if not p.is_absolute() and getattr(registry, "_report_dir", None):
+            p = registry._report_dir / p
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return f"已写入：{p}"
 
     tools = [
         (

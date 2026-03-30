@@ -9,7 +9,7 @@ from sunday.agent.llm_client import LLMClient
 from sunday.agent.models import AgentState, Plan, Step, StepStatus, ThinkingLevel
 
 if TYPE_CHECKING:
-    from sunday.config import Settings
+    from sunday.config import SundayConfig
 
 logger = logging.getLogger(__name__)
 
@@ -81,15 +81,14 @@ class Planner:
     规划阶段使用低温度（0.3），禁止调用外部工具。
     """
 
-    def __init__(self, settings: "Settings", system_prompt: str = "") -> None:
-        self.settings = settings
+    def __init__(self, config: "SundayConfig", system_prompt: str = "") -> None:
+        self.config = config
         self.system_prompt = system_prompt  # 由 ContextBuilder 注入
 
     async def think_and_plan(self, state: AgentState) -> Plan:
         """根据任务和上下文生成结构化 Plan。"""
-        cfg = self.settings.sunday
-        model_cfg = cfg.model
-        api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
+        model_cfg = self.config.model
+        api_key = model_cfg.get_api_key()
 
         budget = THINKING_BUDGET.get(state.thinking_level, 4096)
 
@@ -112,9 +111,8 @@ class Planner:
 
     async def replan(self, failed_step: Step, result_output: str, state: AgentState) -> list[Step]:
         """局部重规划：替换 failed_step 之后所有未执行步骤。"""
-        cfg = self.settings.sunday
-        model_cfg = cfg.model
-        api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
+        model_cfg = self.config.model
+        api_key = model_cfg.get_api_key()
 
         completed = [r for r in state.step_results if r.status == StepStatus.DONE]
         completed_summary = "; ".join(f"{r.step_id}: {r.output[:100]}" for r in completed)

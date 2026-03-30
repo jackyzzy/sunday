@@ -222,19 +222,17 @@ class Gateway:
         from sunday.memory.context import ContextBuilder
         from sunday.memory.manager import MemoryManager
         from sunday.skills.loader import SkillLoader
-        from sunday.tools.cli_tool import make_session_report_dir, register_cli_tools
+        from sunday.tools.cli_tool import register_cli_tools
         from sunday.tools.registry import ToolRegistry
 
-        cfg = self._settings
-        workspace_dir = cfg.sunday.agent.workspace_dir
-        base_report_dir = cfg.sunday.agent.report_dir
-        session_report_dir = make_session_report_dir(base_report_dir, task, session_id)
+        cfg = self._settings.sunday  # SundayConfig
+        workspace_dir = cfg.agent.workspace_dir
 
         async def gw_confirm(tool_name: str, arguments: dict, _sid: str) -> bool:
             return await self.request_confirm(tool_name, arguments, session_id)
 
         registry = ToolRegistry(cfg, confirmation_handler=gw_confirm)
-        register_cli_tools(registry, report_dir=session_report_dir)
+        register_cli_tools(registry)
 
         skill_loader = SkillLoader(
             project_skills_dir=workspace_dir.parent.parent / "skills",
@@ -242,8 +240,8 @@ class Gateway:
         )
         skill_loader.discover()
 
-        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader)
-        memory_manager = MemoryManager(workspace_dir, cfg)
+        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader, config=cfg)
+        memory_manager = MemoryManager(workspace_dir, config=cfg)
 
         async def loop_emit(sid: str, event_type, data: dict) -> None:
             await self.emit(sid, event_type, data)
@@ -255,5 +253,5 @@ class Gateway:
             emit=loop_emit,
             context_builder=context_builder,
             memory_manager=memory_manager,
-            report_dir=session_report_dir,
+            config=cfg,
         )

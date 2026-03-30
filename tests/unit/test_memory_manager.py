@@ -138,6 +138,6 @@ async def test_consolidate_session_writes_log(tmp_path):
 async def test_consolidate_session_no_settings_skips_ai(tmp_path):
     """consolidate_session 在无 settings 时跳过 AI 整合（不报错）"""
     from sunday.agent.models import AgentState
-    mm = MemoryManager(tmp_path, settings=None)
+    mm = MemoryManager(tmp_path, config=None)
     state = AgentState(session_id="s", task="任务")
     await mm.consolidate_session(state)  # 不应抛出异常

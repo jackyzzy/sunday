@@ -12,6 +12,7 @@ from sunday.agent.planner import Planner
 from sunday.agent.verifier import Verifier
 
 if TYPE_CHECKING:
+    from sunday.config import SundayConfig
     from sunday.memory.context import ContextBuilder
     from sunday.memory.manager import MemoryManager
 
@@ -42,7 +43,7 @@ class AgentLoop:
         emit: EmitCallable | None = None,
         context_builder: "ContextBuilder | None" = None,
         memory_manager: "MemoryManager | None" = None,
-        report_dir: "Path | None" = None,
+        config: "SundayConfig | None" = None,
     ) -> None:
         self.planner = planner
         self.executor = executor
@@ -50,10 +51,20 @@ class AgentLoop:
         self.emit = emit or _noop_emit
         self.context_builder = context_builder
         self.memory_manager = memory_manager
-        self.report_dir = report_dir
+        self.config = config
 
     async def run(self, state: AgentState) -> str:
         """执行完整的 think→plan→execute→verify 循环，返回最终摘要。"""
+        # 根据 config 在运行时计算 session 专属报告目录，并通知 ToolRegistry
+        session_report_dir: "Path | None" = None
+        if self.config is not None:
+            from sunday.tools.cli_tool import make_session_report_dir
+            session_report_dir = make_session_report_dir(
+                self.config.agent.report_dir, state.task, state.session_id
+            )
+            if hasattr(self.executor.tool_registry, "set_report_dir"):
+                self.executor.tool_registry.set_report_dir(session_report_dir)
+
         try:
             # 注入 L0 上下文到 Planner（Phase 3+）
             if self.context_builder is not None:
@@ -148,15 +159,15 @@ class AgentLoop:
             summary = await self.verifier.summarize(state)
             await self.emit(state.session_id, "status", {"status": "idle"})
 
-            # 落盘到 report_dir
-            if self.report_dir is not None:
-                self.report_dir.mkdir(parents=True, exist_ok=True)
-                (self.report_dir / "summary.md").write_text(summary, encoding="utf-8")
+            # 落盘到 session_report_dir
+            if session_report_dir is not None:
+                session_report_dir.mkdir(parents=True, exist_ok=True)
+                (session_report_dir / "summary.md").write_text(summary, encoding="utf-8")
                 lines: list[str] = []
                 for r in state.step_results:
                     lines += [f"## {r.step_id} — {r.status.value}", r.output or "", ""]
-                (self.report_dir / "steps.md").write_text("\n".join(lines), encoding="utf-8")
-                logger.debug("报告已写入：%s", self.report_dir)
+                (session_report_dir / "steps.md").write_text("\n".join(lines), encoding="utf-8")
+                logger.debug("报告已写入：%s", session_report_dir)
 
             # 记忆整合（Phase 3+）
             if self.memory_manager is not None:

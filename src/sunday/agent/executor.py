@@ -15,7 +15,7 @@ from sunday.agent.models import (
 )
 
 if TYPE_CHECKING:
-    from sunday.config import Settings
+    from sunday.config import SundayConfig
 
 logger = logging.getLogger(__name__)
 
@@ -57,18 +57,17 @@ class Executor:
 
     def __init__(
         self,
-        settings: "Settings",
+        config: "SundayConfig",
         tool_registry: ToolRegistryProtocol | None = None,
     ) -> None:
-        self.settings = settings
+        self.config = config
         self.tool_registry = tool_registry
 
     async def run(self, step: Step, state: AgentState) -> StepResult:
         """执行单个步骤，返回 StepResult。"""
-        cfg = self.settings.sunday
-        model_cfg = cfg.model
-        max_steps = cfg.reasoning.max_steps
-        api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
+        model_cfg = self.config.model
+        max_steps = self.config.reasoning.max_steps
+        api_key = model_cfg.get_api_key()
 
         system = _STEP_SYSTEM_PROMPT.format(
             intent=step.intent,

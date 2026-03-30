@@ -10,7 +10,9 @@ from pydantic import BaseModel
 from sunday.tools.guard import ToolResultGuard
 
 if TYPE_CHECKING:
-    from sunday.config import Settings
+    from pathlib import Path
+
+    from sunday.config import SundayConfig
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +43,21 @@ class ToolRegistry:
 
     def __init__(
         self,
-        settings: "Settings",
+        config: "SundayConfig",
         confirmation_handler: ConfirmationHandler | None = None,
     ) -> None:
-        cfg = settings.sunday.tools
+        cfg = config.tools
         self._allow_list: list[str] = cfg.allow_list
         self._deny_list: list[str] = cfg.deny_list
         self._default_timeout: int = cfg.default_timeout
         self._guard = ToolResultGuard(max_output_chars=cfg.max_output_chars)
         self._confirmation_handler = confirmation_handler
         self._tools: dict[str, tuple[ToolMeta, Callable]] = {}
+        self._report_dir: "Path | None" = None
+
+    def set_report_dir(self, d: "Path") -> None:
+        """由 AgentLoop.run() 在每次任务开始时调用，路由 write_file 输出至 session 目录。"""
+        self._report_dir = d
 
     def register(self, meta: ToolMeta, fn: Callable) -> None:
         """注册工具（allow/deny list 在执行时过滤，不在注册时过滤）。"""

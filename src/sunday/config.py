@@ -25,6 +25,31 @@ class ModelConfig(BaseModel):
     base_url: str | None = None
     api_key_env: str | None = None  # 指定从哪个环境变量读取 API key，优先于 provider 默认映射
 
+    def get_api_key(self) -> str:
+        """从环境变量读取 API key，无需 Settings 对象。
+
+        优先使用 api_key_env 指定的环境变量名（来自 agent.yaml model.api_key_env），
+        未指定时按 provider 名称回退到默认映射。
+        """
+        if self.api_key_env:
+            key = os.environ.get(self.api_key_env, "")
+            if not key:
+                raise ValueError(f"环境变量 '{self.api_key_env}' 未设置，请在 .env 中配置")
+            return key
+        provider_env = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "google": "GOOGLE_API_KEY",
+        }
+        env_var = provider_env.get(self.provider, f"{self.provider.upper()}_API_KEY")
+        key = os.environ.get(env_var, "")
+        if not key:
+            raise ValueError(
+                f"未找到 provider '{self.provider}' 的 API key，"
+                f"请在 .env 中设置或在 agent.yaml 中配置 model.api_key_env"
+            )
+        return key
+
 
 class ReasoningConfig(BaseModel):
     """推理与思考配置"""

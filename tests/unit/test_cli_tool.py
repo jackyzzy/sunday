@@ -74,7 +74,7 @@ async def test_register_cli_tools_adds_to_registry(tmp_path):
     }):
         settings = Settings()
 
-    registry = ToolRegistry(settings)
+    registry = ToolRegistry(settings.sunday)
     register_cli_tools(registry)
     names = [s["name"] for s in registry.get_schemas()]
     assert "run_shell" in names

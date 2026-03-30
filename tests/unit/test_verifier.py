@@ -45,7 +45,7 @@ def _mock_client(text: str):
 async def test_check_passed(tmp_path):
     """验证通过时 VerifyResult.passed=True"""
     settings = _make_settings(tmp_path)
-    verifier = Verifier(settings)
+    verifier = Verifier(settings.sunday)
 
     verify_json = json.dumps({"passed": True, "reason": "满足标准", "should_replan": False})
     mock_cl = _mock_client(verify_json)
@@ -68,7 +68,7 @@ async def test_check_passed(tmp_path):
 async def test_check_failed_should_replan(tmp_path):
     """验证失败且 should_replan=True"""
     settings = _make_settings(tmp_path)
-    verifier = Verifier(settings)
+    verifier = Verifier(settings.sunday)
 
     verify_json = json.dumps({"passed": False, "reason": "只有2行", "should_replan": True})
     mock_cl = _mock_client(verify_json)
@@ -91,7 +91,7 @@ async def test_check_failed_should_replan(tmp_path):
 async def test_check_failed_no_replan(tmp_path):
     """验证失败且 should_replan=False"""
     settings = _make_settings(tmp_path)
-    verifier = Verifier(settings)
+    verifier = Verifier(settings.sunday)
 
     verify_json = json.dumps({"passed": False, "reason": "任务无意义", "should_replan": False})
     mock_cl = _mock_client(verify_json)
@@ -113,7 +113,7 @@ async def test_check_failed_no_replan(tmp_path):
 async def test_check_no_criteria_passes_without_llm(tmp_path):
     """无成功标准时无需调用 LLM，直接返回通过"""
     settings = _make_settings(tmp_path)
-    verifier = Verifier(settings)
+    verifier = Verifier(settings.sunday)
 
     step = Step(id="s1", intent="test", success_criteria="")
     result = StepResult(step_id="s1", output="任何结果")
@@ -127,7 +127,7 @@ async def test_check_no_criteria_passes_without_llm(tmp_path):
 async def test_check_markdown_code_block_response(tmp_path):
     """响应被 markdown 代码块包裹时仍能解析"""
     settings = _make_settings(tmp_path)
-    verifier = Verifier(settings)
+    verifier = Verifier(settings.sunday)
 
     raw_json = json.dumps({"passed": True, "reason": "ok", "should_replan": False})
     wrapped = f"```json\n{raw_json}\n```"
@@ -149,7 +149,7 @@ async def test_check_markdown_code_block_response(tmp_path):
 async def test_check_invalid_json_falls_back_to_passed(tmp_path):
     """LLM 返回非 JSON 时兜底返回 passed=True"""
     settings = _make_settings(tmp_path)
-    verifier = Verifier(settings)
+    verifier = Verifier(settings.sunday)
 
     mock_cl = _mock_client("这不是 JSON")
 
@@ -171,7 +171,7 @@ async def test_check_invalid_json_falls_back_to_passed(tmp_path):
 async def test_summarize_returns_str(tmp_path):
     """summarize 返回字符串摘要"""
     settings = _make_settings(tmp_path)
-    verifier = Verifier(settings)
+    verifier = Verifier(settings.sunday)
 
     summary_text = "任务已完成，生成了一首五言绝句。"
     mock_cl = _mock_client(summary_text)
@@ -195,7 +195,7 @@ async def test_summarize_returns_str(tmp_path):
 async def test_summarize_empty_results(tmp_path):
     """无步骤结果时 summarize 不崩溃"""
     settings = _make_settings(tmp_path)
-    verifier = Verifier(settings)
+    verifier = Verifier(settings.sunday)
 
     mock_cl = _mock_client("任务执行记录为空。")
     state = AgentState(session_id="sess", task="test")

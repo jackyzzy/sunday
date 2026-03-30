@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sunday.agent.models import AgentState
-    from sunday.config import Settings
+    from sunday.config import SundayConfig
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +41,10 @@ class MemoryManager:
     文件写入使用 .tmp + rename 保证原子性。
     """
 
-    def __init__(self, workspace_dir: Path, settings: "Settings | None" = None) -> None:
+    def __init__(self, workspace_dir: Path, config: "SundayConfig | None" = None) -> None:
         self.workspace_dir = workspace_dir
         self.memory_dir = workspace_dir / "memory"
-        self.settings = settings
+        self.config = config
         self._lock = asyncio.Lock()
 
         # 确保目录存在
@@ -166,7 +166,7 @@ class MemoryManager:
         await self.append_daily_log(log_content)
 
         # 异步：AI 提炼（不阻塞返回）
-        if self.settings is not None:
+        if self.config is not None:
             asyncio.create_task(self._ai_consolidate(state))
 
     # ── 私有方法 ──────────────────────────────────────────────────────────
@@ -177,14 +177,13 @@ class MemoryManager:
         失败时仅记录日志，不抛出异常，不影响用户。
         """
         try:
-            if self.settings is None:
+            if self.config is None:
                 return
 
             from sunday.agent.llm_client import LLMClient
 
-            cfg = self.settings.sunday
-            model_cfg = cfg.model
-            api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
+            model_cfg = self.config.model
+            api_key = model_cfg.get_api_key()
 
             steps_summary = "\n".join(
                 f"- {r.step_id}: {r.output[:300]}"

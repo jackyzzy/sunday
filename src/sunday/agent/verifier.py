@@ -11,7 +11,7 @@ from sunday.agent.llm_client import LLMClient
 from sunday.agent.models import AgentState, Step, StepResult
 
 if TYPE_CHECKING:
-    from sunday.config import Settings
+    from sunday.config import SundayConfig
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +62,8 @@ class VerifyResult(BaseModel):
 class Verifier:
     """负责验证每步执行结果，并生成最终摘要。验证阶段 temperature=0。"""
 
-    def __init__(self, settings: "Settings") -> None:
-        self.settings = settings
+    def __init__(self, config: "SundayConfig") -> None:
+        self.config = config
 
     async def check(self, step: Step, result: StepResult, state: AgentState) -> VerifyResult:
         """对照 success_criteria 判断步骤结果是否通过。"""
@@ -71,9 +71,8 @@ class Verifier:
             # 无验证标准时默认通过
             return VerifyResult(passed=True, reason="无成功标准，默认通过")
 
-        cfg = self.settings.sunday
-        model_cfg = cfg.model
-        api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
+        model_cfg = self.config.model
+        api_key = model_cfg.get_api_key()
 
         prompt = _VERIFY_PROMPT.format(
             intent=step.intent,
@@ -90,9 +89,8 @@ class Verifier:
 
     async def summarize(self, state: AgentState) -> str:
         """生成最终结果摘要。LLM 调用失败时降级为本地摘要，不抛出异常。"""
-        cfg = self.settings.sunday
-        model_cfg = cfg.model
-        api_key = self.settings.get_api_key(model_cfg.provider, model_cfg.api_key_env)
+        model_cfg = self.config.model
+        api_key = model_cfg.get_api_key()
 
         steps_summary = "\n".join(
             f"- 步骤 {r.step_id}（{r.status.value}）：{r.output[:200]}"

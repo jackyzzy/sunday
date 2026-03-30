@@ -64,7 +64,7 @@ def _mock_client(response_data: dict):
 async def test_think_and_plan_returns_plan(tmp_path):
     """think_and_plan 解析 JSON 并返回 Plan"""
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     plan_json = json.dumps(_plan_response("写一首诗", n_steps=2))
     mock_client = _mock_client(_anthropic_text_response(plan_json))
@@ -86,7 +86,7 @@ async def test_think_and_plan_returns_plan(tmp_path):
 async def test_think_and_plan_thinking_off_no_budget(tmp_path):
     """thinking_level=OFF 时不在 body 中带 thinking 字段"""
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     plan_json = json.dumps(_plan_response())
     mock_client = _mock_client(_anthropic_text_response(plan_json))
@@ -105,7 +105,7 @@ async def test_think_and_plan_thinking_off_no_budget(tmp_path):
 async def test_think_and_plan_thinking_high_budget(tmp_path):
     """thinking_level=HIGH 时 budget_tokens=8192"""
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     plan_json = json.dumps(_plan_response())
     mock_client = _mock_client(_anthropic_text_response(plan_json))
@@ -124,7 +124,7 @@ async def test_think_and_plan_thinking_high_budget(tmp_path):
 async def test_think_and_plan_uses_low_temperature(tmp_path):
     """规划阶段 temperature=0.3"""
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     plan_json = json.dumps(_plan_response())
     mock_client = _mock_client(_anthropic_text_response(plan_json))
@@ -143,7 +143,7 @@ async def test_think_and_plan_uses_low_temperature(tmp_path):
 async def test_think_and_plan_parses_markdown_code_block(tmp_path):
     """Plan JSON 被 markdown 代码块包裹时仍能正确解析"""
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     plan_json = json.dumps(_plan_response("目标"))
     wrapped = f"```json\n{plan_json}\n```"
@@ -162,7 +162,7 @@ async def test_think_and_plan_parses_markdown_code_block(tmp_path):
 async def test_think_and_plan_thinking_block_in_response(tmp_path):
     """响应含 thinking block 时，thinking 被存入 Plan.thinking"""
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     plan_json = json.dumps(_plan_response("思考后的目标"))
     response_data = {
@@ -203,7 +203,7 @@ async def test_replan_returns_new_steps(tmp_path):
     from sunday.agent.models import Plan, Step, StepResult
 
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     new_steps = [
         {"id": "step_2_new", "intent": "换个方法", "expected_input": "",
@@ -285,7 +285,7 @@ async def test_replan_handles_markdown_wrapped_json(tmp_path):
     from sunday.agent.models import Plan, Step, StepResult
 
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     new_steps = [{"id": "step_new", "intent": "替代方案",
                   "expected_input": "", "expected_output": "",
@@ -313,7 +313,7 @@ async def test_replan_handles_empty_response(tmp_path):
     from sunday.agent.models import Plan, Step, StepResult
 
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     mock_client = _mock_client(_anthropic_text_response(""))
 
@@ -335,7 +335,7 @@ async def test_replan_handles_think_tag_before_json(tmp_path):
     from sunday.agent.models import Plan, Step
 
     settings = _make_settings(tmp_path)
-    planner = Planner(settings)
+    planner = Planner(settings.sunday)
 
     new_steps = [{"id": "step_new", "intent": "替代",
                   "expected_input": "", "expected_output": "",

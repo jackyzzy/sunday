@@ -71,16 +71,14 @@ class TaskRunner:
         from sunday.memory.context import ContextBuilder
         from sunday.memory.manager import MemoryManager
         from sunday.skills.loader import SkillLoader
-        from sunday.tools.cli_tool import make_session_report_dir, register_cli_tools
+        from sunday.tools.cli_tool import register_cli_tools
         from sunday.tools.registry import ToolRegistry
 
-        cfg = self._settings
-        workspace_dir = cfg.sunday.agent.workspace_dir
-        base_report_dir = cfg.sunday.agent.report_dir
-        session_report_dir = make_session_report_dir(base_report_dir, full_task, f"task_{name}")
+        cfg = self._settings.sunday  # SundayConfig
+        workspace_dir = cfg.agent.workspace_dir
 
         registry = ToolRegistry(cfg, confirmation_handler=_cli_confirm)
-        register_cli_tools(registry, report_dir=session_report_dir)
+        register_cli_tools(registry)
 
         skill_loader = SkillLoader(
             project_skills_dir=Path(__file__).parent.parent / "skills",
@@ -88,8 +86,8 @@ class TaskRunner:
         )
         skill_loader.discover()
 
-        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader)
-        memory_manager = MemoryManager(workspace_dir, cfg)
+        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader, config=cfg)
+        memory_manager = MemoryManager(workspace_dir, config=cfg)
 
         async def emit(sid, event_type, data):
             if event_type == EventType.STREAM:
@@ -108,7 +106,7 @@ class TaskRunner:
             emit=emit,
             context_builder=context_builder,
             memory_manager=memory_manager,
-            report_dir=session_report_dir,
+            config=cfg,
         )
 
         result = await loop.run(state)

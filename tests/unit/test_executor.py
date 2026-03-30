@@ -81,7 +81,7 @@ def _mock_http_client(responses: list[dict]):
 async def test_run_success_no_tools(tmp_path):
     """无工具时模型直接 stop，返回 DONE"""
     settings = _make_settings(tmp_path)
-    executor = Executor(settings)
+    executor = Executor(settings.sunday)
 
     mock_client = _mock_http_client([_anthropic_stop_response("任务完成")])
     step = Step(id="s1", intent="写一句话")
@@ -109,7 +109,7 @@ async def test_run_with_tool_then_stop(tmp_path):
     ]
     mock_registry.execute = AsyncMock(return_value="echo result")
 
-    executor = Executor(settings, tool_registry=mock_registry)
+    executor = Executor(settings.sunday, tool_registry=mock_registry)
 
     responses = [
         _anthropic_tool_use_response("echo", {"text": "hello"}),
@@ -141,7 +141,7 @@ async def test_max_steps_forced_finish(tmp_path):
     mock_registry = MagicMock()
     mock_registry.get_schemas.return_value = [{"name": "foo", "description": "foo"}]
     mock_registry.execute = AsyncMock(return_value="result")
-    executor = Executor(settings, tool_registry=mock_registry)
+    executor = Executor(settings.sunday, tool_registry=mock_registry)
 
     # 前 max_steps-1 次返回工具调用，最后一次返回文本（强制收尾）
     def make_tool_response(i):
@@ -172,7 +172,7 @@ async def test_repetition_error(tmp_path):
     mock_registry = MagicMock()
     mock_registry.get_schemas.return_value = [{"name": "foo", "description": "foo"}]
     mock_registry.execute = AsyncMock(return_value="result")
-    executor = Executor(settings, tool_registry=mock_registry)
+    executor = Executor(settings.sunday, tool_registry=mock_registry)
 
     # 连续两次相同工具+相同参数
     same_response = _anthropic_tool_use_response("foo", {"x": 1})
@@ -194,7 +194,7 @@ async def test_repetition_error(tmp_path):
 async def test_no_tool_registry_completes(tmp_path):
     """无工具注册表时，工具调用返回占位，不崩溃"""
     settings = _make_settings(tmp_path)
-    executor = Executor(settings, tool_registry=None)
+    executor = Executor(settings.sunday, tool_registry=None)
 
     responses = [
         _anthropic_tool_use_response("unknown_tool", {"a": 1}),
@@ -220,7 +220,7 @@ async def test_no_tool_registry_completes(tmp_path):
 async def test_executor_uses_zero_temperature(tmp_path):
     """执行阶段 temperature=0"""
     settings = _make_settings(tmp_path)
-    executor = Executor(settings)
+    executor = Executor(settings.sunday)
 
     mock_client = _mock_http_client([_anthropic_stop_response("ok")])
     step = Step(id="s1", intent="test")
@@ -278,7 +278,7 @@ async def test_call_openai_tools_format(tmp_path):
         base_url="https://api.deepseek.com/v1",
         api_key_env="DEEPSEEK_API_KEY",
     )
-    executor = Executor(settings)
+    executor = Executor(settings.sunday)
 
     captured_body = {}
 
@@ -331,7 +331,7 @@ async def test_call_openai_tools_format(tmp_path):
 async def test_call_openai_tool_call_id_preserved(tmp_path):
     """OpenAI 响应归一化后，tool_calls[0]['id'] 不丢失"""
     settings = _make_settings(tmp_path, provider="openai")
-    executor = Executor(settings)
+    executor = Executor(settings.sunday)
 
     mock_client = _mock_http_client([
         _openai_tool_call_response("run_shell", {"command": "ls"}, call_id="call_xyz999"),
@@ -359,7 +359,7 @@ async def test_call_openai_tool_call_id_preserved(tmp_path):
 async def test_run_openai_tool_message_format(tmp_path):
     """OpenAI 多轮工具调用：第二轮请求的 messages 包含 role='tool' + tool_call_id"""
     settings = _make_settings(tmp_path, provider="openai")
-    executor = Executor(settings)
+    executor = Executor(settings.sunday)
 
     call_id = "call_deepseek_001"
     all_bodies: list[dict] = []
