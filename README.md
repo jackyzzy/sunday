@@ -13,6 +13,7 @@ Sunday 是一个**本地优先（local-first）**的个人 AI 智能体。以终
 - [CLI 用法](#cli-用法)
 - [TUI 操作](#tui-操作)
 - [技能系统](#技能系统)
+- [自定义工具](#自定义工具)
 - [记忆系统](#记忆系统)
 - [配置参考](#配置参考)
 - [邮件与日历配置](#邮件与日历配置)
@@ -203,6 +204,55 @@ author: your_name
 
 ---
 
+## 自定义工具
+
+除内置工具（`read_file`、`write_file`、`list_dir`、`search_files`、`run_shell`）外，你可以在 `workspace/tools/` 目录下添加自定义工具，无需修改源码。
+
+### 添加自定义工具
+
+在 `workspace/tools/` 下新建任意 `*.py` 文件，声明 `TOOLS` 变量：
+
+```python
+# workspace/tools/my_tools.py
+from sunday.tools.registry import ToolMeta
+
+async def fetch_weather(city: str) -> str:
+    # 你的实现
+    return f"{city} 今天晴，25°C"
+
+TOOLS = [
+    (
+        ToolMeta(
+            name="fetch_weather",
+            description="查询指定城市的天气",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "城市名称"},
+                },
+                "required": ["city"],
+            },
+        ),
+        fetch_weather,
+    ),
+]
+```
+
+- 文件名以 `_` 开头的会被跳过（可用于存放辅助模块）
+- 同名工具会覆盖内置工具
+- 加载失败只记录警告，不影响其他工具运行
+
+### write_file 报告目录
+
+`write_file` 使用相对路径时，文件自动保存到当前任务的专属报告目录（`~/.sunday/reports/{task}_{session}/`），无需手动指定完整路径：
+
+```
+# agent 调用示例
+write_file("report.md", "...")   # → ~/.sunday/reports/帮我分析_a1b2c3/report.md
+```
+
+---
+
 ## 记忆系统
 
 Sunday 使用分层文件记忆，所有文件存储在 `~/.sunday/workspace/`（生产）或 `workspace/`（开发）。
@@ -247,29 +297,31 @@ agent:
   name: Sunday
   workspace_dir: .sunday/workspace   # 记忆工作区
   sessions_dir: .sunday/sessions     # 会话存储
+  report_dir: .sunday/reports        # 任务报告输出目录
 
 model:
-  provider: anthropic                  # anthropic | openai | google | ollama
-  id: claude-opus-4-5                  # 模型 ID
+  provider: openai                   # anthropic | openai（兼容接口）
+  id: deepseek-chat                  # 模型 ID
   temperature: 0.2
   max_tokens: 8192
-  base_url: null                       # 本地 Ollama 填写 URL，如 http://localhost:11434
+  base_url: https://api.deepseek.com/v1
+  api_key_env: DEEPSEEK_API_KEY      # 指定从哪个环境变量读取 API key
 
 reasoning:
-  max_steps: 10                        # ReAct 最大步数
-  thinking_level: medium               # off | minimal | low | medium | high
+  max_steps: 15                      # ReAct 最大步数
+  thinking_level: medium             # off | minimal | low | medium | high
   thinking_budget_tokens: 4096
 
 memory:
-  consolidation_cron: "0 4 * * *"     # 整合定时规则（cron 语法）
-  log_retention_days: 30              # 每日日志保留天数
-  l0_max_lines: 100                   # 注入上下文的最大行数
+  consolidation_cron: "0 4 * * *"   # 整合定时规则（cron 语法）
+  log_retention_days: 30             # 每日日志保留天数
+  l0_max_lines: 100                  # 注入上下文的最大行数
 
 tools:
-  default_timeout: 30                 # 工具执行超时（秒）
-  max_output_chars: 4096              # 工具输出最大字符数
-  sandbox_mode: true                  # 启用沙箱模式
-  deny_list:                          # 禁止执行的命令模式
+  default_timeout: 30                # 工具执行超时（秒）
+  max_output_chars: 4096             # 工具输出最大字符数
+  sandbox_mode: true                 # 启用沙箱模式
+  deny_list:                         # 禁止执行的命令模式
     - "rm -rf"
     - "dd if="
 
@@ -285,19 +337,49 @@ tasks:
 
 ### 切换模型
 
-修改 `configs/agent.yaml` 的 `model` 节：
+所有模型统一通过 OpenAI 兼容接口接入（Anthropic 原生接口仍支持）。修改 `configs/agent.yaml` 的 `model` 节，同时在 `.env` 中设置对应的 API key：
 
 ```yaml
-# 使用 OpenAI
+# Anthropic Claude（原生接口）
+model:
+  provider: anthropic
+  id: claude-opus-4-5
+  # .env 中设置：ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI
 model:
   provider: openai
   id: gpt-4o
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
 
-# 使用本地 Ollama
+# DeepSeek（默认）
 model:
-  provider: ollama
+  provider: openai
+  id: deepseek-chat
+  base_url: https://api.deepseek.com/v1
+  api_key_env: DEEPSEEK_API_KEY
+
+# Qwen（阿里云 DashScope）
+model:
+  provider: openai
+  id: qwen-max
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key_env: QWEN_API_KEY
+
+# Moonshot
+model:
+  provider: openai
+  id: moonshot-v1-8k
+  base_url: https://api.moonshot.cn/v1
+  api_key_env: MOONSHOT_API_KEY
+
+# 本地 Ollama（无需 API key）
+model:
+  provider: openai
   id: llama3.2
-  base_url: http://localhost:11434
+  base_url: http://localhost:11434/v1
+  api_key_env: null
 ```
 
 ---
@@ -411,7 +493,8 @@ sunday/
 │   ├── AGENTS.md              # 操作规则
 │   ├── MEMORY.md              # 长期记忆模板
 │   ├── USER.md                # 用户画像模板
-│   └── TOOLS.md               # 工具使用约定
+│   ├── TOOLS.md               # 工具使用约定（注入 agent 上下文）
+│   └── tools/                 # 用户自定义工具（*.py，可选）
 ├── scripts/
 │   ├── task_runner.py         # 定时任务运行器
 │   └── memory_consolidate.py  # 记忆整合脚本
@@ -423,6 +506,7 @@ sunday/
 │   │   ├── planner.py         # 规划器
 │   │   ├── executor.py        # 执行器（ReAct）
 │   │   ├── verifier.py        # 验证器
+│   │   ├── llm_client.py      # 统一 LLM 调用（Anthropic + OpenAI 兼容）
 │   │   └── models.py          # 数据模型
 │   ├── memory/                # 记忆管理
 │   │   ├── manager.py
@@ -431,7 +515,8 @@ sunday/
 │   ├── tools/                 # 工具系统
 │   │   ├── registry.py
 │   │   ├── guard.py
-│   │   └── cli_tool.py
+│   │   ├── cli_tool.py
+│   │   └── local_loader.py    # 用户自定义工具加载器
 │   ├── skills/
 │   │   └── loader.py
 │   ├── gateway/               # WebSocket 守护进程
