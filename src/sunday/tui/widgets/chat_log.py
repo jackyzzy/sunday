@@ -43,7 +43,20 @@ class ChatLog(Widget):
     def add_plan(self, goal: str, steps: list[dict]) -> None:
         self._log.write(f"[bold yellow][规划][/bold yellow] {goal}")
         for s in steps:
-            self._log.write(f"  · {s.get('id', '?')}: {s.get('intent', '')}")
+            self._log.write(f"  [dim][ ][/dim] {s.get('id', '?')}: {s.get('intent', '')}")
+
+    def mark_step(self, step_id: str, status: str, verified: bool | None = None) -> None:
+        """步骤完成时追加状态行（RichLog append-only，不修改已有行）。"""
+        icons = {
+            "done": "[green][✓][/green]",
+            "failed": "[red][✗][/red]",
+            "skipped": "[dim][↷][/dim]",
+        }
+        icon = icons.get(status)
+        if not icon:
+            return
+        suffix = " [yellow](验证未通过)[/yellow]" if status == "done" and verified is False else ""
+        self._log.write(f"  {icon} {step_id}{suffix}")
 
     def append_stream(self, delta: str) -> None:
         """追加流式 token（合并到最后一行）。"""

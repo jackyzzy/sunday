@@ -93,6 +93,11 @@ class AgentLoop:
                 # 检查依赖是否满足
                 if not self._deps_satisfied(step, state):
                     step.status = StepStatus.SKIPPED
+                    await self.emit(state.session_id, "step_result", {
+                        "step_id": step.id,
+                        "status": StepStatus.SKIPPED.value,
+                        "verified": None,
+                    })
                     idx += 1
                     continue
 

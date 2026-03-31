@@ -107,7 +107,7 @@ class SundayApp(App):
         status = self.query_one(StatusBar)
 
         if event_type == EventType.STATUS.value:
-            state = payload.get("state", "")
+            state = payload.get("status", "")
             if state == "thinking":
                 status.set_thinking()
             elif state.startswith("executing"):
@@ -142,6 +142,13 @@ class SundayApp(App):
             chat.add_confirm_request(
                 tool=payload.get("tool", ""),
                 message=payload.get("message", ""),
+            )
+
+        elif event_type == EventType.STEP_RESULT.value:
+            chat.mark_step(
+                step_id=payload.get("step_id", ""),
+                status=payload.get("status", ""),
+                verified=payload.get("verified"),
             )
 
         elif event_type == EventType.SLASH_RESULT.value:

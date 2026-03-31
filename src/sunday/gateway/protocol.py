@@ -23,6 +23,7 @@ class EventType(str, Enum):
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     CONFIRM_REQUEST = "confirm_request"
+    STEP_RESULT = "step_result"
     DONE = "done"
     ERROR = "error"
     SLASH_RESULT = "slash_result"

@@ -113,8 +113,17 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
             steps = data.get("steps", [])
             click.echo(f"\n计划：{goal}")
             for s in steps:
-                click.echo(f"  · {s['id']}: {s['intent']}")
+                click.echo(f"  [ ] {s['id']}: {s['intent']}")
             click.echo("")
+        elif event_type == "step_result":
+            step_id = data.get("step_id", "")
+            status = data.get("status", "")
+            verified = data.get("verified")
+            icons = {"done": "[✓]", "failed": "[✗]", "skipped": "[↷]"}
+            icon = icons.get(status)
+            if icon:
+                suffix = " (验证未通过)" if status == "done" and verified is False else ""
+                click.echo(f"  {icon} {step_id}{suffix}")
 
     try:
         level = ThinkingLevel(thinking)

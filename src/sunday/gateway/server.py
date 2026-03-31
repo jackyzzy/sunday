@@ -187,12 +187,14 @@ class Gateway:
 
     # ── 公开 API ──────────────────────────────────────────────────────────
 
-    async def emit(self, session_id: str, event_type: EventType, data: dict) -> None:
+    async def emit(self, session_id: str, event_type, data: dict) -> None:
         """向 session_id 对应的 WebSocket 推送消息。"""
         ws = self._connections.get(session_id)
         if ws is None:
             return
         try:
+            if not isinstance(event_type, EventType):
+                event_type = EventType(event_type)
             msg = Message(type=event_type, session_id=session_id, data=data)
             await ws.send(msg.to_json())
         except Exception as e:
