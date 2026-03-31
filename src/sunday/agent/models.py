@@ -82,6 +82,15 @@ class Message(BaseModel):
     ts: datetime = Field(default_factory=datetime.now)
 
 
+class TeamResult(BaseModel):
+    """Team 执行单个顶层 Step 的结果"""
+
+    step_id: str
+    passed: bool
+    output: str = ""
+    sub_steps: list[StepResult] = Field(default_factory=list)
+
+
 class AgentState(BaseModel):
     """一次任务执行的完整状态，贯穿整个循环"""
 
@@ -90,6 +99,7 @@ class AgentState(BaseModel):
     history: list[Message] = Field(default_factory=list)
     plan: Plan | None = None
     step_results: list[StepResult] = Field(default_factory=list)
+    team_results: list[TeamResult] = Field(default_factory=list)
     thinking_level: ThinkingLevel = ThinkingLevel.MEDIUM
     aborted: bool = False
     created_at: datetime = Field(default_factory=datetime.now)

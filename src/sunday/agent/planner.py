@@ -85,7 +85,7 @@ class Planner:
         self.config = config
         self.system_prompt = system_prompt  # 由 ContextBuilder 注入
 
-    async def think_and_plan(self, state: AgentState) -> Plan:
+    async def think_and_plan(self, state: AgentState, plan_prompt: str | None = None) -> Plan:
         """根据任务和上下文生成结构化 Plan。"""
         model_cfg = self.config.model
         api_key = model_cfg.get_api_key()
@@ -93,7 +93,17 @@ class Planner:
         budget = THINKING_BUDGET.get(state.thinking_level, 4096)
 
         task_context = f"{self.system_prompt}\n\n---\n\n" if self.system_prompt else ""
-        prompt = task_context + _PLAN_PROMPT.format(task=state.task)
+
+        # 注入对话历史（让 Planner 区分新任务/续任务）
+        history_context = ""
+        if state.history:
+            history_lines = "\n".join(
+                f"{m.role}: {m.content[:300]}" for m in state.history[-10:]
+            )
+            history_context = f"对话历史：\n{history_lines}\n\n---\n\n"
+
+        active_prompt = plan_prompt if plan_prompt is not None else _PLAN_PROMPT
+        prompt = task_context + history_context + active_prompt.format(task=state.task)
 
         messages = [{"role": "user", "content": prompt}]
         data = await LLMClient.call(

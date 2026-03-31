@@ -116,8 +116,11 @@ class Gateway:
         await self._session_mgr.append(session_id, EventType.SEND, {"content": content})
 
         # 构建 AgentLoop 并异步运行
-        from sunday.agent.models import AgentState
-        state = AgentState(session_id=session_id, task=content)
+        from sunday.agent.models import AgentState, Message
+        # 读取最近对话历史注入 Planner 上下文
+        recent_events = self._session_mgr.load_history(session_id, max_events=50)
+        history = _extract_conversation(recent_events, max_turns=5)
+        state = AgentState(session_id=session_id, task=content, history=history)
 
         async def run_loop():
             try:
@@ -265,3 +268,29 @@ class Gateway:
             memory_manager=memory_manager,
             config=cfg,
         )
+
+
+def _extract_conversation(events: list[dict], max_turns: int = 5) -> list:
+    """从会话 JSONL 事件流中提取最近 N 轮对话（send + done 配对）。"""
+    from sunday.agent.models import Message
+
+    messages: list[Message] = []
+    for ev in events:
+        ev_type = ev.get("type", "")
+        data = ev.get("data", {})
+        if ev_type == "send":
+            content = data.get("content", "")
+            if content:
+                messages.append(Message(role="user", content=content))
+        elif ev_type == "done":
+            content = data.get("content", "")
+            if content:
+                messages.append(Message(role="assistant", content=content))
+
+    # 取最近 max_turns 轮（一轮 = user + assistant），排除当前轮（最后一条 user 消息）
+    # 当前轮的 user 消息已经通过 task 传入，不重复注入
+    if messages and messages[-1].role == "user":
+        messages = messages[:-1]
+
+    # 每轮 2 条消息，取最近 max_turns 轮
+    return messages[-(max_turns * 2):]

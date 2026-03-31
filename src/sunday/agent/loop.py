@@ -6,9 +6,10 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable
 
-from sunday.agent.executor import Executor, MaxStepsError, RepetitionError
-from sunday.agent.models import AgentState, StepStatus
+from sunday.agent.executor import Executor
+from sunday.agent.models import AgentState, StepResult, StepStatus, TeamResult
 from sunday.agent.planner import Planner
+from sunday.agent.team import Team
 from sunday.agent.verifier import Verifier
 
 if TYPE_CHECKING:
@@ -106,62 +107,47 @@ class AgentLoop:
                     "status": f"executing:{step.id}",
                 })
 
-                try:
-                    result = await self.executor.run(step, state)
-                except (MaxStepsError, RepetitionError) as e:
-                    logger.warning("步骤 %s 执行异常：%s", step.id, e)
-                    from sunday.agent.models import StepResult
-                    result = StepResult(
-                        step_id=step.id,
-                        status=StepStatus.FAILED,
-                        output=str(e),
-                    )
+                # 每个 Step 交给独立 Team 执行（内含 plan/execute/verify 闭环）
+                team = Team(self.config, self.executor.tool_registry, emit=self.emit)
+                team_result = await team.run(step, state)
 
-                # VERIFY
-                verify_result = await self.verifier.check(step, result, state)
-                result.verified = verify_result.passed
-                result.verify_reason = verify_result.reason
-
-                if verify_result.passed:
+                if team_result.passed:
                     step.status = StepStatus.DONE
                 else:
                     step.status = StepStatus.FAILED
-                    if verify_result.should_replan and replan_count < max_replans:
+                    if replan_count < max_replans:
                         replan_count += 1
-                        logger.info("步骤 %s 验证失败，触发局部重规划（第 %d/%d 次）",
+                        logger.info("步骤 %s Team 执行失败，触发局部重规划（第 %d/%d 次）",
                                     step.id, replan_count, max_replans)
                         await self.emit(state.session_id, "status", {"status": "replanning"})
                         try:
-                            new_steps = await self.planner.replan(step, result.output, state)
+                            new_steps = await self.planner.replan(step, team_result.output, state)
                         except Exception as replan_err:
                             logger.warning("局部重规划失败（%s），跳过重规划继续执行", replan_err)
                             new_steps = []
                         if new_steps:
-                            # 替换当前步骤及之后所有步骤
                             steps = steps[:idx] + new_steps
                             state.plan.steps = steps
-                            # 不递增 idx，继续执行新的第 idx 步
-                            state.step_results.append(result)
+                            state.team_results.append(team_result)
                             continue
-                        # 重规划返回空步骤：记录失败结果，跳出循环
                         logger.warning("重规划返回空步骤，提前结束执行循环")
-                        state.step_results.append(result)
+                        state.team_results.append(team_result)
                         break
-                    elif verify_result.should_replan:
-                        logger.warning("步骤 %s 验证失败，已达重规划上限 %d，继续执行后续步骤",
+                    else:
+                        logger.warning("步骤 %s 执行失败，已达重规划上限 %d，继续执行后续步骤",
                                        step.id, max_replans)
 
-                state.step_results.append(result)
+                state.team_results.append(team_result)
                 await self.emit(state.session_id, "step_result", {
-                    "step_id": result.step_id,
-                    "status": result.status.value,
-                    "verified": result.verified,
+                    "step_id": step.id,
+                    "status": step.status.value,
+                    "verified": team_result.passed,
                 })
                 idx += 1
 
-            # SUMMARIZE
+            # EVALUATE（顶层整体评估）
             await self.emit(state.session_id, "status", {"status": "summarizing"})
-            summary = await self.verifier.summarize(state)
+            summary = await self.verifier.evaluate(state, state.team_results)
             await self.emit(state.session_id, "status", {"status": "idle"})
 
             # 落盘到 session_report_dir
@@ -169,8 +155,11 @@ class AgentLoop:
                 session_report_dir.mkdir(parents=True, exist_ok=True)
                 (session_report_dir / "summary.md").write_text(summary, encoding="utf-8")
                 lines: list[str] = []
-                for r in state.step_results:
-                    lines += [f"## {r.step_id} — {r.status.value}", r.output or "", ""]
+                for tr in state.team_results:
+                    status_mark = "✓" if tr.passed else "✗"
+                    lines += [f"## {tr.step_id} [{status_mark}]", tr.output or "", ""]
+                    for sr in tr.sub_steps:
+                        lines += [f"  ### {sr.step_id} — {sr.status.value}", sr.output or "", ""]
                 (session_report_dir / "steps.md").write_text("\n".join(lines), encoding="utf-8")
                 logger.debug("报告已写入：%s", session_report_dir)
 
@@ -193,16 +182,13 @@ class AgentLoop:
             })
             raise
         finally:
-            logger.info("AgentLoop 结束，session=%s，步骤数=%d",
-                        state.session_id, len(state.step_results))
+            logger.info("AgentLoop 结束，session=%s，Team数=%d",
+                        state.session_id, len(state.team_results))
 
     @staticmethod
     def _deps_satisfied(step, state: AgentState) -> bool:
-        """检查步骤的所有依赖是否已经完成。"""
+        """检查步骤的所有依赖是否已经完成（基于 team_results）。"""
         if not step.depends_on:
             return True
-        done_ids = {
-            r.step_id for r in state.step_results
-            if r.status == StepStatus.DONE
-        }
+        done_ids = {tr.step_id for tr in state.team_results if tr.passed}
         return all(dep in done_ids for dep in step.depends_on)

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 
 from sunday.agent.llm_client import LLMClient
-from sunday.agent.models import AgentState, Step, StepResult
+from sunday.agent.models import AgentState, Step, StepResult, TeamResult
 
 if TYPE_CHECKING:
     from sunday.config import SundayConfig
@@ -50,6 +50,19 @@ _SUMMARIZE_PROMPT = """请根据以下任务执行结果，生成一份简洁的
 - 如有失败步骤，简要说明原因
 - 长度控制在 3~5 句话"""
 
+_EVALUATE_PROMPT = """请根据以下多个 Team 的执行结果，对整体任务完成情况做出评估和总结。
+
+任务：{task}
+
+各 Team 执行结果：
+{results_summary}
+
+要求：
+- 综合评估整体任务是否完成
+- 列出关键输出和结论
+- 如有失败项，简要说明影响
+- 长度控制在 3~5 句话"""
+
 
 class VerifyResult(BaseModel):
     """Verifier 的判断结果"""
@@ -86,6 +99,33 @@ class Verifier:
         except Exception as e:
             logger.warning("check LLM 调用失败（%s），默认通过", e)
             return VerifyResult(passed=True, reason=f"验证调用失败，默认通过：{e}")
+
+    async def evaluate(self, state: AgentState, team_results: list[TeamResult]) -> str:
+        """顶层评估：基于所有 Team 结果生成整体任务摘要。"""
+        model_cfg = self.config.model
+        api_key = model_cfg.get_api_key()
+
+        results_summary = "\n".join(
+            f"- {tr.step_id} ({'✓' if tr.passed else '✗'}): {tr.output[:300]}"
+            for tr in team_results
+        )
+        if not results_summary:
+            results_summary = "无执行记录"
+
+        prompt = _EVALUATE_PROMPT.format(
+            task=state.task,
+            results_summary=results_summary,
+        )
+        try:
+            return await self._call_llm(prompt, model_cfg, api_key)
+        except Exception as e:
+            logger.warning("evaluate LLM 调用失败（%s），使用本地摘要降级", e)
+            passed = sum(1 for tr in team_results if tr.passed)
+            return (
+                f"任务：{state.task}\n"
+                f"完成步骤：{passed}/{len(team_results)}。\n"
+                f"（评估生成失败：{e}）"
+            )
 
     async def summarize(self, state: AgentState) -> str:
         """生成最终结果摘要。LLM 调用失败时降级为本地摘要，不抛出异常。"""
