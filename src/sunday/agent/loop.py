@@ -66,6 +66,18 @@ class AgentLoop:
             if hasattr(self.executor.tool_registry, "set_report_dir"):
                 self.executor.tool_registry.set_report_dir(session_report_dir)
 
+        # Session 结构化日志（CLI 和 TUI 两种模式自动覆盖）
+        from sunday.agent.session_log import SessionLog
+        _log_dir = self.config.agent.log_dir if self.config else Path.home() / ".sunday" / "logs"
+        _session_log = SessionLog(_log_dir, state.session_id)
+        _mode = "cli" if "cli_emit" in getattr(self.emit, "__qualname__", "") else "gateway"
+        _session_log.log_start(state.task, state.thinking_level.value, _mode)
+        _orig_emit = self.emit
+        async def _logged_emit(sid: str, et: str, d: dict) -> None:
+            await _orig_emit(sid, et, d)
+            _session_log.log(et, d)
+        self.emit = _logged_emit
+
         try:
             # 注入 L0 上下文到 Planner（Phase 3+）
             if self.context_builder is not None:
@@ -168,11 +180,13 @@ class AgentLoop:
                 await self.memory_manager.consolidate_session(state)
                 logger.debug("记忆整合完成，session=%s", state.session_id)
 
+            _session_log.log_end(summary, state.team_results)
             return summary
 
         except asyncio.CancelledError:
             state.aborted = True
             await self.emit(state.session_id, "status", {"status": "aborted"})
+            _session_log.log_abort()
             raise
         except Exception as e:
             logger.exception("AgentLoop 未捕获异常：%s", e)
@@ -180,8 +194,10 @@ class AgentLoop:
                 "status": "error",
                 "message": str(e),
             })
+            _session_log.log_error(e)
             raise
         finally:
+            self.emit = _orig_emit
             logger.info("AgentLoop 结束，session=%s，Team数=%d",
                         state.session_id, len(state.team_results))
 

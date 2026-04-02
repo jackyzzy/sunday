@@ -118,6 +118,37 @@ Shell 工具：`.sh` 文件头部加 YAML frontmatter 注释（`# ---` 包裹 na
 
 ---
 
+## 调试与日志
+
+每次 AgentLoop 执行（CLI 或 TUI 模式）自动在 `~/.sunday/logs/{session_id}.jsonl` 生成结构化日志，无需任何额外配置。
+
+**日志格式（每行一个 JSON）：**
+```json
+{"ts": "ISO8601", "session_id": "12位hex", "event": "...", "data": {...}}
+```
+
+**事件类型：** `session_start` / `plan` / `step_start` / `step_result` / `replan` / `error` / `session_end`
+
+**常用 jq 查询：**
+```bash
+# 查看某 session 执行结果（最后一行即 session_end）
+tail -1 ~/.sunday/logs/<session_id>.jsonl | jq .
+
+# 查看所有未通过验证的步骤
+jq 'select(.event == "step_result" and .data.verified == false)' ~/.sunday/logs/<session_id>.jsonl
+
+# 最近 10 个 session 健康概览（session_id / outcome / 耗时）
+for f in $(ls -t ~/.sunday/logs/*.jsonl | head -10); do
+  tail -1 "$f" | jq -r '[.session_id, .data.outcome, .data.duration_seconds] | @tsv'
+done
+```
+
+**实现位置：**
+- `src/sunday/agent/session_log.py` — `SessionLog` 类
+- `src/sunday/agent/loop.py` — `run()` 内的 `_logged_emit` 包装（约 10 行）
+
+---
+
 ## 目录约定
 
 | 路径 | 用途 |
@@ -126,6 +157,7 @@ Shell 工具：`.sh` 文件头部加 YAML frontmatter 注释（`# ---` 包裹 na
 | `configs/` | 所有配置（可提交 git） |
 | `skills/` | 技能包（SKILL.md 描述 + 任意 *.py 工具文件 + 可选 *.sh 工具） |
 | `workspace/` | 开发用工作区（SOUL.md 等可提交，memory/ 不提交） |
+| `~/.sunday/logs/` | Session 结构化日志（JSONL，按 session_id 命名，不提交 git） |
 | `.env` | 密钥（不提交 git） |
 | `specs.md` | 需求规格（权威文档） |
 

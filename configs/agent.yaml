@@ -3,6 +3,7 @@ agent:
   workspace_dir: .sunday/workspace
   sessions_dir: .sunday/sessions
   report_dir: .sunday/reports
+  log_dir: .sunday/logs
 
 # Anthropic
 # model:
@@ -52,7 +53,7 @@ model:
 #   api_key_env: null
 
 reasoning:
-  max_steps: 10
+  max_steps: 20
   thinking_level: medium  # off | minimal | low | medium | high
   thinking_budget_tokens: 4096
 

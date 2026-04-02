@@ -15,6 +15,22 @@ from pydantic_settings import BaseSettings
 load_dotenv(override=False)
 
 
+def _resolve_configs_dir() -> Path:
+    """定位 configs 目录。优先读 SUNDAY_CONFIGS_DIR 环境变量，否则从包位置推导。
+
+    SUNDAY_CONFIGS_DIR 支持：
+    - 绝对路径：直接使用
+    - 相对路径：相对于当前工作目录（cwd）解析
+    - 未设置：从包位置推导（src/sunday/config.py 上溯 3 级为项目根）
+    """
+    env = os.environ.get("SUNDAY_CONFIGS_DIR")
+    if env:
+        p = Path(env)
+        return p if p.is_absolute() else Path.cwd() / p
+    # 包位置推导：src/sunday/config.py → 上溯 3 级为项目根
+    return Path(__file__).parent.parent.parent / "configs"
+
+
 class ModelConfig(BaseModel):
     """LLM 模型配置"""
 
@@ -106,12 +122,14 @@ class AgentConfig(BaseModel):
     workspace_dir: Path = Path("~/.sunday/workspace")
     sessions_dir: Path = Path("~/.sunday/sessions")
     report_dir: Path = Path("~/.sunday/reports")
+    log_dir: Path = Path("~/.sunday/logs")
 
     def model_post_init(self, __context: Any) -> None:
         # 展开 ~ 路径
         self.workspace_dir = Path(os.path.expanduser(self.workspace_dir))
         self.sessions_dir = Path(os.path.expanduser(self.sessions_dir))
         self.report_dir = Path(os.path.expanduser(self.report_dir))
+        self.log_dir = Path(os.path.expanduser(self.log_dir))
 
 
 class TaskConfig(BaseModel):
@@ -142,9 +160,6 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     google_api_key: str = ""
 
-    # 配置文件路径
-    sunday_config_file: str = "configs/agent.yaml"
-
     # 日志级别
     sunday_log_level: str = "INFO"
 
@@ -152,10 +167,17 @@ class Settings(BaseSettings):
 
     @cached_property
     def sunday(self) -> SundayConfig:
-        """解析 YAML 配置文件，只执行一次"""
-        config_path = Path(self.sunday_config_file)
+        """解析 configs/agent.yaml，只执行一次。
+
+        configs 目录通过 _resolve_configs_dir() 定位，支持 SUNDAY_CONFIGS_DIR 环境变量覆盖。
+        """
+        config_path = _resolve_configs_dir() / "agent.yaml"
         if not config_path.exists():
-            return SundayConfig()
+            raise FileNotFoundError(
+                f"配置文件未找到：{config_path}\n"
+                f"请确认 configs/agent.yaml 存在，"
+                f"或通过 SUNDAY_CONFIGS_DIR 环境变量指定配置目录（支持绝对/相对路径）。"
+            )
 
         with config_path.open(encoding="utf-8") as f:
             raw: dict = yaml.safe_load(f) or {}

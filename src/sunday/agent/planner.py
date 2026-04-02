@@ -124,8 +124,8 @@ class Planner:
         model_cfg = self.config.model
         api_key = model_cfg.get_api_key()
 
-        completed = [r for r in state.step_results if r.status == StepStatus.DONE]
-        completed_summary = "; ".join(f"{r.step_id}: {r.output[:100]}" for r in completed)
+        completed = [tr for tr in state.team_results if tr.passed]
+        completed_summary = "; ".join(f"{tr.step_id}: {tr.output[:150]}" for tr in completed)
 
         remaining = []
         found = False
