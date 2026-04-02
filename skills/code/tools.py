@@ -27,3 +27,22 @@ async def run_python(code: str) -> str:
         return "[超时] Python 代码执行超过 10 秒"
     except Exception as e:
         return f"[错误] 代码执行失败：{e}"
+
+
+from sunday.tools.registry import ToolMeta  # noqa: E402
+
+TOOLS = [
+    (ToolMeta(
+        name="run_python",
+        description="在本地子进程中执行 Python 代码片段（10 秒超时）。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "要执行的 Python 代码"},
+            },
+            "required": ["code"],
+        },
+        is_dangerous=True,
+        timeout=15,
+    ), run_python),
+]

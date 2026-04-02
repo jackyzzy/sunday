@@ -201,3 +201,62 @@ def _extract_body(payload: dict) -> str:
             return result
 
     return ""
+
+
+from sunday.tools.registry import ToolMeta  # noqa: E402
+
+TOOLS = [
+    (ToolMeta(
+        name="list_emails",
+        description="列出 Gmail 收件箱邮件，支持 Gmail 搜索语法。需配置 Gmail OAuth2 凭证。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "max_results": {"type": "integer", "description": "最多返回条数，默认10"},
+                "query": {"type": "string", "description": "Gmail 搜索语法，如 'is:unread newer_than:1d'"},
+            },
+        },
+        timeout=30,
+    ), list_emails),
+    (ToolMeta(
+        name="read_email",
+        description="读取指定邮件的完整内容（主题、发件人、正文）。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "message_id": {"type": "string", "description": "邮件 ID"},
+            },
+            "required": ["message_id"],
+        },
+        timeout=30,
+    ), read_email),
+    (ToolMeta(
+        name="send_email",
+        description="发送新邮件（不可逆操作，需用户确认）。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "收件人邮箱"},
+                "subject": {"type": "string", "description": "邮件主题"},
+                "body": {"type": "string", "description": "邮件正文"},
+            },
+            "required": ["to", "subject", "body"],
+        },
+        is_dangerous=True,
+        timeout=30,
+    ), send_email),
+    (ToolMeta(
+        name="reply_email",
+        description="回复指定邮件（不可逆操作，需用户确认）。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "message_id": {"type": "string", "description": "原邮件 ID"},
+                "body": {"type": "string", "description": "回复正文"},
+            },
+            "required": ["message_id", "body"],
+        },
+        is_dangerous=True,
+        timeout=30,
+    ), reply_email),
+]

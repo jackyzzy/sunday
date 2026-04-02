@@ -2,7 +2,7 @@
 
 > 你的个人边端 AI 智能体，运行在本地电脑，帮你完成日常办公的 AI 自动化任务。
 
-Sunday 是一个**本地优先（local-first）**的个人 AI 智能体。以终端为主要交互界面，通过 THINK → PLAN → EXECUTE → VERIFY 完整循环，帮你处理邮件、日历、文件、代码等日常工作任务。数据全程不离开本机。
+Sunday 是一个 **本地优先（local-first）** 的个人 AI 智能体。以终端为主要交互界面，通过 THINK → PLAN → EXECUTE → VERIFY 完整循环，帮你处理邮件、日历、文件、代码等日常工作任务。数据全程不离开本机。
 
 ---
 
@@ -44,7 +44,7 @@ Sunday 是一个**本地优先（local-first）**的个人 AI 智能体。以终
 # 需要 Python 3.12+，推荐 uv 管理依赖
 pip install uv
 
-git clone https://github.com/yourname/sunday
+git clone https://github.com/jackyzzy/sunday
 cd sunday
 uv sync
 ```
@@ -177,12 +177,55 @@ uv run sunday skills list     # 列出所有已发现的技能包
 
 ### 添加自定义技能
 
-在 `skills/` 目录下新建文件夹，包含两个文件：
+在 `skills/` 目录下新建文件夹，至少包含 `SKILL.md`，工具文件名不限：
 
 ```
 skills/my_skill/
-├── SKILL.md     # 技能描述（frontmatter + 使用说明）
-└── tools.py     # 工具实现（async 函数）
+├── SKILL.md          # 技能描述（必须，frontmatter + 使用说明）
+├── tools.py          # 工具实现（Python，文件名任意）
+├── helper.py         # 可选，多文件拆分，_ 开头的文件跳过
+└── deploy.sh         # 可选，Shell 脚本工具
+```
+
+**Python 工具文件**：定义 `TOOLS` 变量即可自动注册到 ToolRegistry：
+
+```python
+# skills/my_skill/tools.py
+from sunday.tools.registry import ToolMeta
+
+async def do_something(param: str) -> str:
+    return f"结果：{param}"
+
+TOOLS = [
+    (ToolMeta(
+        name="do_something",
+        description="做某件事",
+        input_schema={
+            "type": "object",
+            "properties": {"param": {"type": "string", "description": "参数"}},
+            "required": ["param"],
+        },
+        is_dangerous=False,   # True 时执行前需用户确认
+        timeout=30,
+    ), do_something),
+]
+```
+
+**Shell 脚本工具**：文件头部写 YAML frontmatter 注释即可自动注册：
+
+```bash
+#!/bin/bash
+# ---
+# name: my_shell_tool
+# description: 执行某个 shell 操作
+# args:
+#   - name: target
+#     type: string
+#     description: 目标参数
+# is_dangerous: false
+# timeout: 15
+# ---
+echo "处理：$1"
 ```
 
 `SKILL.md` frontmatter 格式：
@@ -453,15 +496,17 @@ crontab -e
                               Agent Loop（每会话独立）
                               ┌─────┴──────────┐
                               │                │
-                           Planner         Executor（ReAct）
-                        （THINK + PLAN）   （EXECUTE）
-                              │                │
-                           Verifier       Tool Registry
-                           （VERIFY）     ├── CLI / File Tools
-                              │           ├── Web Search
-                           Memory         ├── Email (Gmail)
-                           Manager        ├── Calendar
-                                          └── MCP Servers
+                           Planner         Team × N（每步一个 Team）
+                        （THINK + PLAN）   ┌──────┴──────────┐
+                              │           │                 │
+                           Evaluator   Sub-Planner     Executor（ReAct）
+                           （整体评估） （子任务拆解）  （EXECUTE）
+                              │                         │
+                           Memory                  Tool Registry
+                           Manager                 ├── CLI / File Tools
+                                                   ├── Skill Tools（自动加载）
+                                                   ├── User Tools（workspace/tools/）
+                                                   └── MCP Servers
 ```
 
 **关键设计原则**：

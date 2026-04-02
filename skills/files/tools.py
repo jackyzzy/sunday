@@ -101,3 +101,41 @@ async def batch_rename(
         return f"[错误] 正则表达式无效：{e}"
     except Exception as e:
         return f"[错误] 批量重命名失败：{e}"
+
+
+from sunday.tools.registry import ToolMeta  # noqa: E402
+
+# 注意：read_file / write_file / list_dir / search_files 已由 register_cli_tools() 注册，
+# 此处只补充 files/tools.py 自身实现的两个工具。
+TOOLS = [
+    (ToolMeta(
+        name="content_search",
+        description="在目录中递归搜索包含关键词的文件，返回文件路径和匹配行号。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "搜索关键词"},
+                "directory": {"type": "string", "description": "搜索根目录，默认当前目录"},
+                "case_sensitive": {"type": "boolean", "description": "是否区分大小写，默认 false"},
+            },
+            "required": ["keyword"],
+        },
+        timeout=15,
+    ), content_search),
+    (ToolMeta(
+        name="batch_rename",
+        description="批量重命名目录中匹配正则 pattern 的文件。dry_run=true 时仅预览不执行。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "directory": {"type": "string", "description": "目标目录"},
+                "pattern": {"type": "string", "description": "文件名匹配正则"},
+                "replacement": {"type": "string", "description": "替换字符串"},
+                "dry_run": {"type": "boolean", "description": "仅预览不执行，默认 true"},
+            },
+            "required": ["directory", "pattern", "replacement"],
+        },
+        is_dangerous=True,
+        timeout=10,
+    ), batch_rename),
+]

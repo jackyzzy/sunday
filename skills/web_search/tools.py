@@ -85,3 +85,34 @@ async def fetch_url(url: str, max_chars: int = 4096) -> str:
 
     except Exception as e:
         return f"[错误] 抓取页面失败：{e}"
+
+
+from sunday.tools.registry import ToolMeta  # noqa: E402
+
+TOOLS = [
+    (ToolMeta(
+        name="web_search",
+        description="使用 Tavily API 搜索网络，返回标题+摘要列表。需配置 TAVILY_API_KEY。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词"},
+                "max_results": {"type": "integer", "description": "最多返回条数，默认5"},
+            },
+            "required": ["query"],
+        },
+        timeout=30,
+    ), web_search),
+    (ToolMeta(
+        name="fetch_url",
+        description="抓取指定 URL 的页面内容，提取纯文本正文。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "目标 URL"},
+            },
+            "required": ["url"],
+        },
+        timeout=30,
+    ), fetch_url),
+]

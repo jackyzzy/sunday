@@ -244,8 +244,10 @@ class Gateway:
 
         registry = ToolRegistry(cfg, confirmation_handler=gw_confirm)
         register_cli_tools(registry)
-        from sunday.tools.local_loader import load_user_tools
+        from sunday.tools.local_loader import load_skill_tools, load_user_tools
         load_user_tools(workspace_dir, registry)
+        project_skills_dir = workspace_dir.parent.parent / "skills"
+        load_skill_tools(project_skills_dir, registry)
 
         skill_loader = SkillLoader(
             project_skills_dir=workspace_dir.parent.parent / "skills",

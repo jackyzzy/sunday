@@ -176,3 +176,56 @@ async def update_event(
         return f"[错误] {e}"
     except Exception as e:
         return f"[错误] 更新日历事件失败：{e}"
+
+
+from sunday.tools.registry import ToolMeta  # noqa: E402
+
+TOOLS = [
+    (ToolMeta(
+        name="list_events",
+        description="列出 Google Calendar 指定日期范围内的事件。需配置 Google OAuth2 凭证。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "date_from": {"type": "string", "description": "开始日期 YYYY-MM-DD，默认今天"},
+                "date_to": {"type": "string", "description": "结束日期 YYYY-MM-DD"},
+                "max_results": {"type": "integer", "description": "最多返回条数，默认10"},
+            },
+        },
+        timeout=30,
+    ), list_events),
+    (ToolMeta(
+        name="create_event",
+        description="创建新的日历事件（不可逆操作，需用户确认）。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "事件标题"},
+                "start": {"type": "string", "description": "开始时间 YYYY-MM-DDTHH:MM:SS"},
+                "end": {"type": "string", "description": "结束时间 YYYY-MM-DDTHH:MM:SS"},
+                "description": {"type": "string", "description": "事件描述"},
+                "location": {"type": "string", "description": "地点"},
+            },
+            "required": ["title", "start", "end"],
+        },
+        is_dangerous=True,
+        timeout=30,
+    ), create_event),
+    (ToolMeta(
+        name="update_event",
+        description="更新已有日历事件（不可逆操作，需用户确认）。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "事件 ID"},
+                "title": {"type": "string", "description": "新标题"},
+                "start": {"type": "string", "description": "新开始时间"},
+                "end": {"type": "string", "description": "新结束时间"},
+                "description": {"type": "string", "description": "新描述"},
+            },
+            "required": ["event_id"],
+        },
+        is_dangerous=True,
+        timeout=30,
+    ), update_event),
+]
