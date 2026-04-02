@@ -27,15 +27,45 @@ Sunday 是一个本地优先的个人边端 AI 智能体，运行在用户个人
 - 记忆层级：`SOUL.md`（永久）→ `MEMORY.md`（长期）→ `memory/YYYY-MM-DD.md`（每日）→ 会话 JSONL（临时）
 - 上下文注入顺序严格按照 L0→L1→L2 优先级
 
-### Agent 执行循环（不可破坏的顺序）
-THINK → PLAN → DECOMPOSE → EXECUTE（ReAct）→ VERIFY → 记忆更新
+### Agent 执行循环（两层 Team 架构，不可破坏的顺序）
 
-不得跳过 VERIFY 步骤，不得在 PLAN 阶段调用外部工具。
+**外层 AgentLoop（编排层）：**
+THINK → PLAN（顶层步骤分解）→ 按依赖顺序驱动各 Team → EVALUATE（汇总评估）→ 记忆更新
+
+**内层 Team（执行层，每个顶层 Step 独立一个 Team）：**
+SUB-PLAN（1~3 个子步骤）→ EXECUTE（ReAct 工具调用）→ VERIFY（逐子步验证）
+
+规则：
+- 不得跳过 VERIFY 步骤（内外两层均适用）
+- 不得在 PLAN 阶段调用外部工具
+- Team 共享顶层 ToolRegistry，不重复创建
+- 顶层评估用 `Verifier.evaluate()`，子步骤验证用 `Verifier.check()`
 
 ### 工具安全原则
 - 所有不可逆操作（删除文件、发送邮件、git push）必须向用户确认后执行
-- CLI 工具调用必须经过 `tools/cli.py` 封装，不得直接 `subprocess.run`
+- CLI 工具调用必须经过 `tools/cli_tool.py` 封装，不得直接 `subprocess.run`
 - 工具结果必须经过 Tool Result Guard 验证再返回给模型
+
+### 工具注册规范（CLI 和 TUI 两种模式均须遵守）
+
+所有工具按以下顺序注册，后加载可覆盖前加载（用户工具优先级最高）：
+
+1. `register_cli_tools(registry)`             ← 内置工具（最低优先级）
+2. `load_skill_tools(skills_dir, registry)`   ← 技能工具
+3. `load_user_tools(workspace_dir, registry)` ← 用户自定义（最高优先级）
+
+**两条注册路径，必须同步维护：**
+- CLI 模式：`src/sunday/cli.py` → `_run_task()`
+- TUI/Gateway 模式：`src/sunday/gateway/server.py` → `_build_agent_loop()`
+
+技能工具声明方式（`skills/*/` 目录下任意 `.py` 文件末尾，文件名不限）：
+```python
+from sunday.tools.registry import ToolMeta
+TOOLS = [
+    (ToolMeta(name="...", description="...", input_schema={...}), fn),
+]
+```
+Shell 工具：`.sh` 文件头部加 YAML frontmatter 注释（`# ---` 包裹 name/description/args）可自动注册。
 
 ---
 
@@ -94,7 +124,7 @@ THINK → PLAN → DECOMPOSE → EXECUTE（ReAct）→ VERIFY → 记忆更新
 |------|------|
 | `src/sunday/` | 所有实现代码 |
 | `configs/` | 所有配置（可提交 git） |
-| `skills/` | 技能包（SKILL.md + tools.py） |
+| `skills/` | 技能包（SKILL.md 描述 + 任意 *.py 工具文件 + 可选 *.sh 工具） |
 | `workspace/` | 开发用工作区（SOUL.md 等可提交，memory/ 不提交） |
 | `.env` | 密钥（不提交 git） |
 | `specs.md` | 需求规格（权威文档） |
