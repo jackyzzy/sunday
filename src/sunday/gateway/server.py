@@ -207,7 +207,7 @@ class Gateway:
         self, tool_name: str, arguments: dict, session_id: str
     ) -> bool:
         """向客户端发送确认请求，等待 confirm 消息回复。"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._pending_confirms[session_id] = fut
         await self.emit(session_id, EventType.CONFIRM_REQUEST, {
@@ -226,50 +226,17 @@ class Gateway:
 
     def _build_agent_loop(self, session_id: str, task: str = ""):
         """构建完整 AgentLoop（注入所有依赖）。"""
-        from sunday.agent.executor import Executor
-        from sunday.agent.loop import AgentLoop
-        from sunday.agent.planner import Planner
-        from sunday.agent.verifier import Verifier
-        from sunday.memory.context import ContextBuilder
-        from sunday.memory.manager import MemoryManager
-        from sunday.skills.loader import SkillLoader
-        from sunday.tools.cli_tool import register_cli_tools
-        from sunday.tools.registry import ToolRegistry
+        from sunday.bootstrap import build_agent_loop
 
         cfg = self._settings.sunday  # SundayConfig
-        workspace_dir = cfg.agent.workspace_dir
 
         async def gw_confirm(tool_name: str, arguments: dict, _sid: str) -> bool:
             return await self.request_confirm(tool_name, arguments, session_id)
 
-        registry = ToolRegistry(cfg, confirmation_handler=gw_confirm)
-        register_cli_tools(registry)
-        from sunday.tools.local_loader import load_skill_tools, load_user_tools
-        project_skills_dir = workspace_dir.parent.parent / "skills"
-        load_skill_tools(project_skills_dir, registry)
-        load_user_tools(workspace_dir, registry)
-
-        skill_loader = SkillLoader(
-            project_skills_dir=workspace_dir.parent.parent / "skills",
-            user_skills_dir=workspace_dir / "skills",
-        )
-        skill_loader.discover()
-
-        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader, config=cfg)
-        memory_manager = MemoryManager(workspace_dir, config=cfg)
-
         async def loop_emit(sid: str, event_type, data: dict) -> None:
             await self.emit(sid, event_type, data)
 
-        return AgentLoop(
-            planner=Planner(cfg),
-            executor=Executor(cfg, tool_registry=registry),
-            verifier=Verifier(cfg),
-            emit=loop_emit,
-            context_builder=context_builder,
-            memory_manager=memory_manager,
-            config=cfg,
-        )
+        return build_agent_loop(cfg, loop_emit, mode="gateway", confirmation_handler=gw_confirm)
 
 
 def _extract_conversation(events: list[dict], max_turns: int = 5) -> list:

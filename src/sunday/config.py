@@ -71,6 +71,8 @@ class ReasoningConfig(BaseModel):
     """推理与思考配置"""
 
     max_steps: int = 15
+    max_replans_per_step: int = 2   # 每个步骤最多重规划次数
+    max_replans_total: int = 10     # 整个任务重规划总上限（防护兜底）
     thinking_level: str = "medium"  # off | minimal | low | medium | high
     thinking_budget_tokens: int = 4096
 
@@ -151,6 +153,20 @@ class SundayConfig(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     tasks: dict[str, TaskConfig] = Field(default_factory=dict)
 
+    def load_prompt(self, name: str) -> str:
+        """从 configs/prompts/{name}.md 加载 prompt 模板。
+
+        name 是文件名（不含 .md 后缀），例如 'plan'、'verify' 等。
+        文件不存在时抛出 FileNotFoundError。
+        """
+        prompt_path = _resolve_configs_dir() / "prompts" / f"{name}.md"
+        if not prompt_path.exists():
+            raise FileNotFoundError(
+                f"Prompt 文件未找到：{prompt_path}\n"
+                f"请确认 configs/prompts/{name}.md 存在。"
+            )
+        return prompt_path.read_text(encoding="utf-8")
+
 
 class Settings(BaseSettings):
     """应用级别设置，从 .env 读取密钥，从 YAML 读取配置"""
@@ -167,11 +183,13 @@ class Settings(BaseSettings):
 
     @cached_property
     def sunday(self) -> SundayConfig:
-        """解析 configs/agent.yaml，只执行一次。
+        """解析 agent.yaml 配置文件，只执行一次。
 
-        configs 目录通过 _resolve_configs_dir() 定位，支持 SUNDAY_CONFIGS_DIR 环境变量覆盖。
+        配置文件路径：SUNDAY_CONFIGS_DIR 指定目录（支持绝对/相对路径），
+        未设置时从包位置推导 configs/agent.yaml。
         """
         config_path = _resolve_configs_dir() / "agent.yaml"
+
         if not config_path.exists():
             raise FileNotFoundError(
                 f"配置文件未找到：{config_path}\n"

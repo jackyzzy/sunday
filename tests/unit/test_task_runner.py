@@ -27,11 +27,13 @@ def _make_settings(tmp_path, tasks: dict | None = None):
 
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         from sunday.config import Settings
 
-        return Settings()
+        s = Settings()
+        _ = s.sunday  # 触发 cached_property，确保在 patch.dict 上下文内读取正确配置
+        return s
 
 
 def test_task_runner_loads_tasks_from_config(tmp_path):

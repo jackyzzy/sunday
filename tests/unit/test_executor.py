@@ -27,9 +27,11 @@ def _make_settings(tmp_path, provider="anthropic", base_url=None, api_key_env=No
         "ANTHROPIC_API_KEY": "sk-ant-fake",
         "OPENAI_API_KEY": "sk-openai-fake",
         "DEEPSEEK_API_KEY": "sk-deepseek-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
-        return Settings()
+        s = Settings()
+        _ = s.sunday  # 触发 cached_property，确保在 patch.dict 上下文内读取正确配置
+        return s
 
 
 def _anthropic_stop_response(text: str) -> dict:

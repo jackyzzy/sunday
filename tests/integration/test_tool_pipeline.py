@@ -18,7 +18,7 @@ def _make_settings(tmp_path):
     }))
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         return Settings()
 

@@ -20,9 +20,11 @@ def _make_settings(tmp_path, provider="anthropic"):
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
         "OPENAI_API_KEY": "sk-openai-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
-        return Settings()
+        s = Settings()
+        _ = s.sunday  # 在上下文内触发 cached_property 求值，确保读取正确的 config_file
+        return s
 
 
 def _mock_client(text: str):
@@ -164,49 +166,6 @@ async def test_check_invalid_json_falls_back_to_passed(tmp_path):
         vr = await verifier.check(step, result, state)
 
     assert vr.passed is True  # 兜底行为
-
-
-# ── summarize ─────────────────────────────────────────────────────────────────
-
-async def test_summarize_returns_str(tmp_path):
-    """summarize 返回字符串摘要"""
-    settings = _make_settings(tmp_path)
-    verifier = Verifier(settings.sunday)
-
-    summary_text = "任务已完成，生成了一首五言绝句。"
-    mock_cl = _mock_client(summary_text)
-
-    state = AgentState(session_id="sess", task="写诗")
-    state.step_results.append(
-        StepResult(step_id="s1", status=StepStatus.DONE, output="诗的内容")
-    )
-
-    with (
-        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_cl),
-    ):
-        summary = await verifier.summarize(state)
-
-    assert isinstance(summary, str)
-    assert len(summary) > 0
-    assert summary == summary_text
-
-
-async def test_summarize_empty_results(tmp_path):
-    """无步骤结果时 summarize 不崩溃"""
-    settings = _make_settings(tmp_path)
-    verifier = Verifier(settings.sunday)
-
-    mock_cl = _mock_client("任务执行记录为空。")
-    state = AgentState(session_id="sess", task="test")
-
-    with (
-        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_cl),
-    ):
-        summary = await verifier.summarize(state)
-
-    assert isinstance(summary, str)
 
 
 # ── VerifyResult 模型 ─────────────────────────────────────────────────────────

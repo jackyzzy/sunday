@@ -42,14 +42,12 @@ def test_email_send_is_dangerous():
     assert callable(send_email)
 
 
-def test_email_no_credentials_error():
+async def test_email_no_credentials_error():
     """无凭证文件时返回友好错误提示"""
-    import asyncio
-
     from skills.email.tools import list_emails  # noqa: PLC0415
 
     with patch("skills.email.tools._get_credentials_path", return_value=Path("/nonexistent/path")):
-        result = asyncio.get_event_loop().run_until_complete(list_emails())
+        result = await list_emails()
     assert "[错误]" in result
     assert any(kw in result for kw in ("凭证", "配置", "依赖", "credentials", "google"))
 

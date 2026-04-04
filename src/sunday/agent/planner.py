@@ -6,10 +6,11 @@ import logging
 from typing import TYPE_CHECKING
 
 from sunday.agent.llm_client import LLMClient
-from sunday.agent.models import AgentState, Plan, Step, StepStatus, ThinkingLevel
+from sunday.agent.models import AgentState, Plan, Step, ThinkingLevel
+from sunday.agent.utils import strip_code_fence
 
 if TYPE_CHECKING:
-    from sunday.config import SundayConfig
+    from sunday.config import ModelConfig, SundayConfig
 
 logger = logging.getLogger(__name__)
 
@@ -22,58 +23,6 @@ THINKING_BUDGET: dict[ThinkingLevel, int] = {
     ThinkingLevel.HIGH: 8192,
 }
 
-_PLAN_PROMPT = """你是一个任务规划专家。请根据以下任务，制定清晰的执行计划。
-
-任务：{task}
-
-要求：
-- 将任务分解为 1~6 个可独立执行的步骤
-- 每步需明确意图、期望输入输出、成功判断标准
-- 步骤之间的依赖关系用 depends_on 表达
-
-请以 JSON 格式输出，结构如下：
-{{
-  "goal": "任务总目标",
-  "steps": [
-    {{
-      "id": "step_1",
-      "intent": "这步要做什么",
-      "expected_input": "输入是什么",
-      "expected_output": "输出是什么",
-      "success_criteria": "如何判断成功",
-      "depends_on": []
-    }}
-  ]
-}}
-
-只输出 JSON，不要任何额外说明。"""
-
-_REPLAN_PROMPT = """执行计划中的一个步骤失败了，需要局部重规划。
-
-失败步骤：{failed_step_intent}
-失败原因：{reason}
-已完成步骤结果摘要：{completed_summary}
-原始任务目标：{goal}
-剩余未完成步骤：{remaining_steps}
-
-请重新规划从失败步骤开始的后续步骤，输出替代方案。
-
-以 JSON 格式输出替代步骤列表：
-{{
-  "steps": [
-    {{
-      "id": "step_X",
-      "intent": "...",
-      "expected_input": "...",
-      "expected_output": "...",
-      "success_criteria": "...",
-      "depends_on": []
-    }}
-  ]
-}}
-
-只输出 JSON，不要任何额外说明。"""
-
 
 class Planner:
     """负责 THINK + PLAN + DECOMPOSE 阶段。
@@ -84,10 +33,22 @@ class Planner:
     def __init__(self, config: "SundayConfig", system_prompt: str = "") -> None:
         self.config = config
         self.system_prompt = system_prompt  # 由 ContextBuilder 注入
+        self._plan_prompt: str | None = None
+        self._replan_prompt: str | None = None
+
+    def _get_plan_prompt(self) -> str:
+        if self._plan_prompt is None:
+            self._plan_prompt = self.config.load_prompt("plan")
+        return self._plan_prompt
+
+    def _get_replan_prompt(self) -> str:
+        if self._replan_prompt is None:
+            self._replan_prompt = self.config.load_prompt("replan")
+        return self._replan_prompt
 
     async def think_and_plan(self, state: AgentState, plan_prompt: str | None = None) -> Plan:
         """根据任务和上下文生成结构化 Plan。"""
-        model_cfg = self.config.model
+        model_cfg: ModelConfig = self.config.model
         api_key = model_cfg.get_api_key()
 
         budget = THINKING_BUDGET.get(state.thinking_level, 4096)
@@ -98,11 +59,12 @@ class Planner:
         history_context = ""
         if state.history:
             history_lines = "\n".join(
-                f"{m.role}: {m.content[:300]}" for m in state.history[-10:]
+                f"{m.role}: {m.content[:300]}..." if len(m.content) > 300 else f"{m.role}: {m.content}"
+                for m in state.history[-10:]
             )
             history_context = f"对话历史：\n{history_lines}\n\n---\n\n"
 
-        active_prompt = plan_prompt if plan_prompt is not None else _PLAN_PROMPT
+        active_prompt = plan_prompt if plan_prompt is not None else self._get_plan_prompt()
         prompt = task_context + history_context + active_prompt.format(task=state.task)
 
         messages = [{"role": "user", "content": prompt}]
@@ -121,7 +83,7 @@ class Planner:
 
     async def replan(self, failed_step: Step, result_output: str, state: AgentState) -> list[Step]:
         """局部重规划：替换 failed_step 之后所有未执行步骤。"""
-        model_cfg = self.config.model
+        model_cfg: ModelConfig = self.config.model
         api_key = model_cfg.get_api_key()
 
         completed = [tr for tr in state.team_results if tr.passed]
@@ -135,7 +97,7 @@ class Planner:
             if found:
                 remaining.append(step.intent)
 
-        prompt = _REPLAN_PROMPT.format(
+        prompt = self._get_replan_prompt().format(
             failed_step_intent=failed_step.intent,
             reason=result_output[:500],
             completed_summary=completed_summary or "无",
@@ -146,27 +108,21 @@ class Planner:
         raw = await LLMClient.call_text(
             model_cfg, api_key, prompt, max_tokens=4096, temperature=0.3
         )
-        plan_text = self._strip_code_fence(raw)
+        plan_text = strip_code_fence(raw)
         if not plan_text:
             logger.warning("replan LLM 响应为空，将返回空步骤列表")
             return []
-        data = json.loads(plan_text)
+        try:
+            data = json.loads(plan_text)
+        except json.JSONDecodeError as e:
+            logger.warning("replan 响应 JSON 解析失败（%s），返回空步骤列表。原文：%s", e, plan_text[:200])
+            return []
         return [Step(**s) for s in data.get("steps", [])]
-
-    @staticmethod
-    def _strip_code_fence(text: str) -> str:
-        """去除 markdown 代码块包装（```json...``` 或 ```...```）。"""
-        text = text.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-            text = "\n".join(inner).strip()
-        return text
 
     @staticmethod
     def _parse_plan(text: str, thinking: str | None = None) -> Plan:
         """解析 JSON 格式的 Plan，容错处理 markdown 代码块。"""
-        text = Planner._strip_code_fence(text)
+        text = strip_code_fence(text)
         data = json.loads(text)
         steps = [Step(**s) for s in data.get("steps", [])]
         return Plan(goal=data.get("goal", ""), thinking=thinking, steps=steps)

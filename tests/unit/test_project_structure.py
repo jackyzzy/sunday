@@ -102,6 +102,6 @@ def test_env_example_exists():
 def test_env_example_has_required_vars():
     """.env.example 包含必要的环境变量名"""
     content = (ROOT / ".env.example").read_text(encoding="utf-8")
-    required_vars = ["ANTHROPIC_API_KEY", "SUNDAY_CONFIG_FILE"]
+    required_vars = ["ANTHROPIC_API_KEY", "SUNDAY_CONFIGS_DIR"]
     for var in required_vars:
         assert var in content, f".env.example 缺少变量：{var}"

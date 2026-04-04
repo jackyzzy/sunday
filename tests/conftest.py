@@ -32,7 +32,7 @@ def fake_settings(tmp_path):
     env_patch = {
         "ANTHROPIC_API_KEY": "sk-ant-fake-key",
         "OPENAI_API_KEY": "sk-openai-fake-key",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }
 
     with pytest.MonkeyPatch.context() as mp:

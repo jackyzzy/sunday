@@ -17,7 +17,7 @@ def test_sunday_config_defaults(tmp_path):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "test-key")
-        mp.setenv("SUNDAY_CONFIG_FILE", str(config_file))
+        mp.setenv("SUNDAY_CONFIGS_DIR", str(config_file.parent))
         from sunday.config import Settings
         s = Settings()
         cfg = s.sunday
@@ -31,7 +31,7 @@ def test_get_api_key_success():
     """测试 API key 获取"""
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "sk-ant-test123")
-        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        mp.setenv("SUNDAY_CONFIGS_DIR", "configs")
         from sunday.config import Settings
         s = Settings()
         assert s.get_api_key("anthropic") == "sk-ant-test123"
@@ -41,7 +41,7 @@ def test_get_api_key_missing():
     """测试缺失 API key 时抛出异常"""
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "")
-        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        mp.setenv("SUNDAY_CONFIGS_DIR", "configs")
         from sunday.config import Settings
         s = Settings()
         with pytest.raises(ValueError, match="anthropic"):
@@ -94,7 +94,7 @@ def test_yaml_missing_fields_use_defaults(tmp_path):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "fake-key")
-        mp.setenv("SUNDAY_CONFIG_FILE", str(config_file))
+        mp.setenv("SUNDAY_CONFIGS_DIR", str(config_file.parent))
         from sunday.config import Settings
         s = Settings()
         cfg = s.sunday
@@ -113,7 +113,7 @@ def test_yaml_type_error_raises(tmp_path):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "fake-key")
-        mp.setenv("SUNDAY_CONFIG_FILE", str(config_file))
+        mp.setenv("SUNDAY_CONFIGS_DIR", str(config_file.parent))
         from sunday.config import Settings
         s = Settings()
         with pytest.raises((ValidationError, ValueError)):
@@ -136,7 +136,7 @@ def test_settings_sunday_cached():
     """多次访问 settings.sunday 返回同一对象（cached_property）"""
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "fake-key")
-        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        mp.setenv("SUNDAY_CONFIGS_DIR", "configs")
         from sunday.config import Settings
         s = Settings()
         cfg1 = s.sunday
@@ -149,7 +149,7 @@ def test_api_key_not_in_error_message():
     fake_key = "sk-ant-secret-12345"
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "")
-        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        mp.setenv("SUNDAY_CONFIGS_DIR", "configs")
         from sunday.config import Settings
         s = Settings()
         try:
@@ -163,7 +163,7 @@ def test_openai_api_key():
     """可以获取 OpenAI API key"""
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("OPENAI_API_KEY", "sk-openai-test")
-        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        mp.setenv("SUNDAY_CONFIGS_DIR", "configs")
         from sunday.config import Settings
         s = Settings()
         assert s.get_api_key("openai") == "sk-openai-test"
@@ -173,7 +173,7 @@ def test_unknown_provider_raises():
     """未知 provider 应抛出 ValueError"""
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "fake-key")
-        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        mp.setenv("SUNDAY_CONFIGS_DIR", "configs")
         from sunday.config import Settings
         s = Settings()
         with pytest.raises(ValueError):
@@ -197,18 +197,17 @@ def test_mcp_servers_empty_by_default():
     assert cfg.servers == [], "默认 MCP 服务器列表应为空"
 
 
-def test_sunday_config_file_missing_falls_back_to_defaults(tmp_path):
-    """配置文件不存在时回退到默认 SundayConfig"""
-    nonexistent = tmp_path / "nonexistent.yaml"
+def test_sunday_config_file_missing_raises(tmp_path):
+    """SUNDAY_CONFIGS_DIR 指向的目录不含 agent.yaml 时抛出 FileNotFoundError"""
+    empty_dir = tmp_path / "empty_configs"
+    empty_dir.mkdir()
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "fake-key")
-        mp.setenv("SUNDAY_CONFIG_FILE", str(nonexistent))
+        mp.setenv("SUNDAY_CONFIGS_DIR", str(empty_dir))
         from sunday.config import Settings
         s = Settings()
-        cfg = s.sunday
-        # 应返回全默认配置而不是抛异常
-        assert cfg.agent.name == "Sunday"
-        assert cfg.model.provider == "anthropic"
+        with pytest.raises(FileNotFoundError, match="配置文件未找到"):
+            _ = s.sunday
 
 
 # ── api_key_env 新增 3 个测试 ─────────────────────────────────────────────────
@@ -219,7 +218,7 @@ def test_get_api_key_via_explicit_env():
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
         mp.setenv("OPENAI_API_KEY", "")
-        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        mp.setenv("SUNDAY_CONFIGS_DIR", "configs")
         from sunday.config import Settings
         s = Settings()
         key = s.get_api_key("openai", api_key_env="DEEPSEEK_API_KEY")
@@ -230,7 +229,7 @@ def test_get_api_key_fallback_to_provider():
     """api_key_env=None 时，回退到按 provider 名的默认映射"""
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("ANTHROPIC_API_KEY", "sk-ant-fallback")
-        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        mp.setenv("SUNDAY_CONFIGS_DIR", "configs")
         from sunday.config import Settings
         s = Settings()
         key = s.get_api_key("anthropic", api_key_env=None)
@@ -241,7 +240,7 @@ def test_get_api_key_missing_env_raises():
     """api_key_env 指向不存在的环境变量时，抛出 ValueError 并提示变量名"""
     with pytest.MonkeyPatch.context() as mp:
         mp.delenv("MOONSHOT_API_KEY", raising=False)
-        mp.setenv("SUNDAY_CONFIG_FILE", "configs/agent.yaml")
+        mp.setenv("SUNDAY_CONFIGS_DIR", "configs")
         from sunday.config import Settings
         s = Settings()
         with pytest.raises(ValueError, match="MOONSHOT_API_KEY"):

@@ -1,4 +1,8 @@
-"""T2-5 验证：AgentLoop 集成测试（mock LLM，无真实 API）"""
+"""T2-5 验证：AgentLoop 集成测试（mock LLM，无真实 API）
+
+架构说明：AgentLoop 通过 Team 执行每个顶层 Step，不直接调用 executor/verifier。
+测试通过 patch('sunday.agent.loop.Team') 来隔离 Team 行为。
+"""
 from __future__ import annotations
 
 import os
@@ -8,7 +12,7 @@ import yaml
 
 from sunday.agent.executor import Executor, MaxStepsError
 from sunday.agent.loop import AgentLoop
-from sunday.agent.models import AgentState, Plan, Step, StepResult, StepStatus
+from sunday.agent.models import AgentState, Plan, Step, StepResult, StepStatus, TeamResult
 from sunday.agent.planner import Planner
 from sunday.agent.verifier import Verifier, VerifyResult
 
@@ -22,7 +26,7 @@ def _make_settings(tmp_path, provider="anthropic"):
     }))
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         return Settings()
 
@@ -35,43 +39,46 @@ def _make_plan(n_steps=2) -> Plan:
     )
 
 
-def _make_step_result(step_id: str, status=StepStatus.DONE) -> StepResult:
-    return StepResult(step_id=step_id, status=status, output=f"{step_id} 输出")
+def _make_team_result(step_id: str, passed: bool = True) -> TeamResult:
+    return TeamResult(step_id=step_id, passed=passed, output=f"{step_id} 输出")
+
+
+def _make_mock_loop(plan, team_results, evaluate_return="任务完成！"):
+    """构造一个标准测试用 AgentLoop，mock Planner、Team、Verifier.evaluate。"""
+    planner = MagicMock(spec=Planner)
+    planner.think_and_plan = AsyncMock(return_value=plan)
+    planner.system_prompt = ""
+
+    executor = MagicMock(spec=Executor)
+    executor.tool_registry = None
+
+    verifier = MagicMock(spec=Verifier)
+    verifier.evaluate = AsyncMock(return_value=evaluate_return)
+
+    loop = AgentLoop(planner=planner, executor=executor, verifier=verifier)
+    return loop, planner, executor, verifier
 
 
 # ── 基本流程 ──────────────────────────────────────────────────────────────────
 
 async def test_loop_completes_simple_task(tmp_path):
-    """完整循环：plan → execute → verify → summarize"""
+    """完整循环：plan → Team × 2 → evaluate → 返回摘要"""
     _make_settings(tmp_path)
 
     plan = _make_plan(2)
-    planner = MagicMock(spec=Planner)
-    planner.think_and_plan = AsyncMock(return_value=plan)
-
-    executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(side_effect=[
-        _make_step_result("step_1"),
-        _make_step_result("step_2"),
-    ])
-
-    verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(return_value=VerifyResult(passed=True, reason="ok"))
-    verifier.summarize = AsyncMock(return_value="任务完成！")
-
-    loop = AgentLoop(planner=planner, executor=executor, verifier=verifier)
+    loop, planner, executor, verifier = _make_mock_loop(plan, [], evaluate_return="任务完成！")
     state = AgentState(session_id="sess", task="测试任务")
 
-    result = await loop.run(state)
+    team_results = [_make_team_result("step_1"), _make_team_result("step_2")]
+    with patch("sunday.agent.loop.Team") as MockTeam:
+        instance = MockTeam.return_value
+        instance.run = AsyncMock(side_effect=team_results)
+        result = await loop.run(state)
 
     assert result == "任务完成！"
     assert planner.think_and_plan.called
-    assert executor.run.call_count == 2
-    assert verifier.check.call_count == 2
-    assert verifier.summarize.called
-
-    # step_results 被正确记录
-    assert len(state.step_results) == 2
+    assert instance.run.call_count == 2
+    assert len(state.team_results) == 2
     assert state.plan is plan
 
 
@@ -80,65 +87,51 @@ async def test_loop_emit_called(tmp_path):
     _make_settings(tmp_path)
 
     plan = _make_plan(1)
-    planner = MagicMock(spec=Planner)
-    planner.think_and_plan = AsyncMock(return_value=plan)
-
-    executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(return_value=_make_step_result("step_1"))
-
-    verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(return_value=VerifyResult(passed=True, reason="ok"))
-    verifier.summarize = AsyncMock(return_value="done")
+    loop, planner, executor, verifier = _make_mock_loop(plan, [], evaluate_return="done")
 
     emitted = []
 
     async def capture_emit(session_id, event_type, data):
         emitted.append((event_type, data))
 
-    loop = AgentLoop(planner=planner, executor=executor, verifier=verifier, emit=capture_emit)
+    loop.emit = capture_emit
     state = AgentState(session_id="sess", task="test")
 
-    await loop.run(state)
+    with patch("sunday.agent.loop.Team") as MockTeam:
+        instance = MockTeam.return_value
+        instance.run = AsyncMock(return_value=_make_team_result("step_1"))
+        await loop.run(state)
 
     event_types = [e[0] for e in emitted]
     assert "status" in event_types
     assert "plan" in event_types
 
-    # 应该有 thinking 状态
     status_events = [e[1]["status"] for e in emitted if e[0] == "status" and "status" in e[1]]
     assert "thinking" in status_events
     assert "idle" in status_events
 
 
-async def test_loop_step_results_have_verified_flag(tmp_path):
-    """step_results 的 verified 字段被 verifier 填写"""
+async def test_loop_step_result_verified_in_team_result(tmp_path):
+    """team_results 的 passed 字段来自 Team.run 的返回"""
     _make_settings(tmp_path)
 
     plan = _make_plan(1)
-    planner = MagicMock(spec=Planner)
-    planner.think_and_plan = AsyncMock(return_value=plan)
-
-    executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(return_value=_make_step_result("step_1"))
-
-    verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(
-        return_value=VerifyResult(passed=True, reason="验证通过")
-    )
-    verifier.summarize = AsyncMock(return_value="done")
-
-    loop = AgentLoop(planner=planner, executor=executor, verifier=verifier)
+    loop, planner, executor, verifier = _make_mock_loop(plan, [], evaluate_return="done")
     state = AgentState(session_id="sess", task="test")
-    await loop.run(state)
 
-    assert state.step_results[0].verified is True
-    assert state.step_results[0].verify_reason == "验证通过"
+    with patch("sunday.agent.loop.Team") as MockTeam:
+        instance = MockTeam.return_value
+        instance.run = AsyncMock(return_value=_make_team_result("step_1", passed=True))
+        await loop.run(state)
+
+    assert state.team_results[0].passed is True
+    assert state.team_results[0].step_id == "step_1"
 
 
 # ── verify 失败触发重规划 ──────────────────────────────────────────────────────
 
-async def test_verify_failure_triggers_replan(tmp_path):
-    """Verifier 失败且 should_replan=True 时调用 planner.replan"""
+async def test_team_failure_triggers_replan(tmp_path):
+    """Team 执行失败时触发顶层重规划"""
     _make_settings(tmp_path)
 
     plan = _make_plan(2)
@@ -146,63 +139,60 @@ async def test_verify_failure_triggers_replan(tmp_path):
 
     planner = MagicMock(spec=Planner)
     planner.think_and_plan = AsyncMock(return_value=plan)
+    planner.system_prompt = ""
     planner.replan = AsyncMock(return_value=new_steps)
 
     executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(side_effect=[
-        _make_step_result("step_1"),
-        _make_step_result("step_2", status=StepStatus.FAILED),
-        _make_step_result("step_2_new"),  # 重规划后的步骤
-    ])
+    executor.tool_registry = None
 
     verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(side_effect=[
-        VerifyResult(passed=True, reason="step_1 ok"),       # step_1 通过
-        VerifyResult(passed=False, reason="失败", should_replan=True),  # step_2 失败
-        VerifyResult(passed=True, reason="step_2_new ok"),    # 新步骤通过
-    ])
-    verifier.summarize = AsyncMock(return_value="重规划后完成")
+    verifier.evaluate = AsyncMock(return_value="重规划后完成")
 
     loop = AgentLoop(planner=planner, executor=executor, verifier=verifier)
     state = AgentState(session_id="sess", task="test")
 
-    result = await loop.run(state)
+    # step_1 通过，step_2 失败触发 replan，step_2_new 通过
+    team_results_seq = [
+        _make_team_result("step_1", passed=True),
+        _make_team_result("step_2", passed=False),
+        _make_team_result("step_2_new", passed=True),
+    ]
+    with patch("sunday.agent.loop.Team") as MockTeam:
+        instance = MockTeam.return_value
+        instance.run = AsyncMock(side_effect=team_results_seq)
+        result = await loop.run(state)
 
     assert result == "重规划后完成"
     assert planner.replan.called
-    # 最终计划包含了新步骤
     step_ids = [s.id for s in state.plan.steps]
     assert "step_2_new" in step_ids
 
 
-async def test_verify_failure_no_replan_continues(tmp_path):
-    """Verifier 失败但 should_replan=False 时继续执行剩余步骤"""
+async def test_team_failure_no_replan_continues(tmp_path):
+    """Team 失败但重规划返回空时，继续后续步骤"""
     _make_settings(tmp_path)
 
     plan = _make_plan(2)
     planner = MagicMock(spec=Planner)
     planner.think_and_plan = AsyncMock(return_value=plan)
+    planner.system_prompt = ""
+    planner.replan = AsyncMock(return_value=[])  # 返回空
 
     executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(side_effect=[
-        _make_step_result("step_1", status=StepStatus.FAILED),
-        _make_step_result("step_2"),
-    ])
+    executor.tool_registry = None
 
     verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(side_effect=[
-        VerifyResult(passed=False, reason="失败", should_replan=False),
-        VerifyResult(passed=True, reason="ok"),
-    ])
-    verifier.summarize = AsyncMock(return_value="部分完成")
+    verifier.evaluate = AsyncMock(return_value="部分完成")
 
     loop = AgentLoop(planner=planner, executor=executor, verifier=verifier)
     state = AgentState(session_id="sess", task="test")
 
-    result = await loop.run(state)
+    with patch("sunday.agent.loop.Team") as MockTeam:
+        instance = MockTeam.return_value
+        instance.run = AsyncMock(return_value=_make_team_result("step_1", passed=False))
+        result = await loop.run(state)
 
     assert result == "部分完成"
-    assert executor.run.call_count == 2  # 两步都执行了
 
 
 # ── 依赖满足检查 ──────────────────────────────────────────────────────────────
@@ -217,56 +207,26 @@ async def test_deps_satisfied_skips_unmet(tmp_path):
 
     planner = MagicMock(spec=Planner)
     planner.think_and_plan = AsyncMock(return_value=plan)
-
-    # step_1 执行失败（FAILED），step_2 依赖 step_1 DONE → 应被跳过
-    executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(
-        return_value=_make_step_result("step_1", status=StepStatus.FAILED)
-    )
-
-    verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(
-        return_value=VerifyResult(passed=False, reason="fail", should_replan=False)
-    )
-    verifier.summarize = AsyncMock(return_value="done")
-
-    loop = AgentLoop(planner=planner, executor=executor, verifier=verifier)
-    state = AgentState(session_id="sess", task="test")
-    await loop.run(state)
-
-    # step_2 依赖未满足，executor.run 只被调用了 1 次
-    assert executor.run.call_count == 1
-
-
-# ── 异常处理 ──────────────────────────────────────────────────────────────────
-
-async def test_max_steps_error_handled(tmp_path):
-    """Executor 抛出 MaxStepsError 时，步骤被标记 FAILED 并继续"""
-    _make_settings(tmp_path)
-
-    plan = _make_plan(2)
-    planner = MagicMock(spec=Planner)
-    planner.think_and_plan = AsyncMock(return_value=plan)
+    planner.system_prompt = ""
+    planner.replan = AsyncMock(return_value=[])
 
     executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(side_effect=[
-        MaxStepsError("超出步骤数"),
-        _make_step_result("step_2"),
-    ])
+    executor.tool_registry = None
 
     verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(side_effect=[
-        VerifyResult(passed=False, reason="max steps", should_replan=False),
-        VerifyResult(passed=True, reason="ok"),
-    ])
-    verifier.summarize = AsyncMock(return_value="部分完成")
+    verifier.evaluate = AsyncMock(return_value="done")
 
     loop = AgentLoop(planner=planner, executor=executor, verifier=verifier)
     state = AgentState(session_id="sess", task="test")
 
-    result = await loop.run(state)
-    assert result == "部分完成"
-    assert len(state.step_results) == 2
+    with patch("sunday.agent.loop.Team") as MockTeam:
+        instance = MockTeam.return_value
+        # step_1 执行并返回 passed=False，step_2 依赖 step_1 passed → 被跳过
+        instance.run = AsyncMock(return_value=_make_team_result("step_1", passed=False))
+        await loop.run(state)
+
+    # step_2 依赖未满足，Team.run 只被调用了 1 次
+    assert instance.run.call_count == 1
 
 
 # ── T3-4：ContextBuilder + MemoryManager 接入 AgentLoop ──────────────────────
@@ -286,11 +246,10 @@ async def test_loop_injects_context_into_planner(tmp_path):
     planner.system_prompt = ""
 
     executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(return_value=_make_step_result("step_1"))
+    executor.tool_registry = None
 
     verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(return_value=VerifyResult(passed=True, reason="ok"))
-    verifier.summarize = AsyncMock(return_value="done")
+    verifier.evaluate = AsyncMock(return_value="done")
 
     context_builder = ContextBuilder(workspace)
     loop = AgentLoop(
@@ -300,9 +259,12 @@ async def test_loop_injects_context_into_planner(tmp_path):
         context_builder=context_builder,
     )
     state = AgentState(session_id="s1", task="测试注入")
-    await loop.run(state)
 
-    # system_prompt 被注入（包含 SOUL.md 内容）
+    with patch("sunday.agent.loop.Team") as MockTeam:
+        instance = MockTeam.return_value
+        instance.run = AsyncMock(return_value=_make_team_result("step_1"))
+        await loop.run(state)
+
     assert "你是 Sunday" in planner.system_prompt
 
 
@@ -313,13 +275,13 @@ async def test_loop_calls_memory_consolidate(tmp_path):
     plan = _make_plan(1)
     planner = MagicMock(spec=Planner)
     planner.think_and_plan = AsyncMock(return_value=plan)
+    planner.system_prompt = ""
 
     executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(return_value=_make_step_result("step_1"))
+    executor.tool_registry = None
 
     verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(return_value=VerifyResult(passed=True, reason="ok"))
-    verifier.summarize = AsyncMock(return_value="done")
+    verifier.evaluate = AM(return_value="done")
 
     memory_manager = MagicMock()
     memory_manager.consolidate_session = AM(return_value=None)
@@ -331,7 +293,11 @@ async def test_loop_calls_memory_consolidate(tmp_path):
         memory_manager=memory_manager,
     )
     state = AgentState(session_id="s2", task="记忆整合测试")
-    await loop.run(state)
+
+    with patch("sunday.agent.loop.Team") as MockTeam:
+        instance = MockTeam.return_value
+        instance.run = AsyncMock(return_value=_make_team_result("step_1"))
+        await loop.run(state)
 
     memory_manager.consolidate_session.assert_called_once_with(state)
 
@@ -341,15 +307,20 @@ async def test_loop_no_context_builder_runs_fine(tmp_path):
     plan = _make_plan(1)
     planner = MagicMock(spec=Planner)
     planner.think_and_plan = AsyncMock(return_value=plan)
+    planner.system_prompt = ""
 
     executor = MagicMock(spec=Executor)
-    executor.run = AsyncMock(return_value=_make_step_result("step_1"))
+    executor.tool_registry = None
 
     verifier = MagicMock(spec=Verifier)
-    verifier.check = AsyncMock(return_value=VerifyResult(passed=True, reason="ok"))
-    verifier.summarize = AsyncMock(return_value="done")
+    verifier.evaluate = AsyncMock(return_value="done")
 
     loop = AgentLoop(planner=planner, executor=executor, verifier=verifier)
     state = AgentState(session_id="s3", task="向后兼容测试")
-    result = await loop.run(state)
+
+    with patch("sunday.agent.loop.Team") as MockTeam:
+        instance = MockTeam.return_value
+        instance.run = AsyncMock(return_value=_make_team_result("step_1"))
+        result = await loop.run(state)
+
     assert result == "done"

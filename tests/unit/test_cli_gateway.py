@@ -22,7 +22,7 @@ def _make_env(tmp_path) -> dict:
     }))
     return {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }
 
 

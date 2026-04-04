@@ -96,7 +96,8 @@ def test_run_no_api_key_exits_1(runner, tmp_path):
         "ANTHROPIC_API_KEY": "",
         "OPENAI_API_KEY": "",
         "GOOGLE_API_KEY": "",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "DEEPSEEK_API_KEY": "",
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }, clear=False):
         result = runner.invoke(main, ["run", "hello"])
     assert result.exit_code == 1
@@ -119,7 +120,7 @@ def test_run_thinking_valid_values(runner, level):
         with (
             patch.dict(os.environ, {
                 "ANTHROPIC_API_KEY": "fake-key",
-                "SUNDAY_CONFIG_FILE": str(config_file),
+                "SUNDAY_CONFIGS_DIR": ".",  # isolated_filesystem() 已切换 cwd，agent.yaml 就在当前目录
             }),
             patch("sunday.agent.simple.SimpleAgent.run", mock_run),
         ):
@@ -153,7 +154,7 @@ def test_run_model_override(runner, tmp_path):
     with (
         patch.dict(os.environ, {
             "ANTHROPIC_API_KEY": "fake-key",
-            "SUNDAY_CONFIG_FILE": str(config_file),
+            "SUNDAY_CONFIGS_DIR": str(tmp_path),
         }),
         patch("sunday.agent.simple.SimpleAgent.run", fake_run),
     ):
@@ -183,7 +184,7 @@ def test_memory_show_file_exists(runner, tmp_path):
     # cli.py 使用 `from sunday.config import settings`，patch 模块级单例
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "fake-key",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         fake_settings = Settings()
 
@@ -207,7 +208,7 @@ def test_memory_show_file_missing(runner, tmp_path):
 
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "fake-key",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         result = runner.invoke(main, ["memory", "show", "SOUL"])
     # 文件不存在时应提示错误（可能是 exit_code != 0 或输出包含"不存在"）
@@ -235,7 +236,7 @@ def test_memory_search_found(runner, tmp_path):
 
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "fake-key",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         fake_settings = Settings()
 
@@ -262,7 +263,7 @@ def test_memory_search_not_found(runner, tmp_path):
 
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "fake-key",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         fake_settings = Settings()
 

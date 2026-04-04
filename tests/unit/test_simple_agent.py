@@ -31,9 +31,11 @@ def _make_settings(tmp_path, provider="anthropic", model_id="claude-test"):
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
         "OPENAI_API_KEY": "sk-openai-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
-        return Settings()
+        s = Settings()
+        _ = s.sunday  # 触发 cached_property，确保在 patch.dict 上下文内读取正确配置
+        return s
 
 
 def _anthropic_response(text: str, extra_blocks: list | None = None) -> dict:

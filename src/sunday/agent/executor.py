@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, NamedTuple, Protocol
 
 from sunday.agent.llm_client import LLMClient
 from sunday.agent.models import (
@@ -15,7 +15,7 @@ from sunday.agent.models import (
 )
 
 if TYPE_CHECKING:
-    from sunday.config import SundayConfig
+    from sunday.config import ModelConfig, SundayConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,21 +35,9 @@ class ToolRegistryProtocol(Protocol):
     async def execute(self, tool_name: str, arguments: dict, session_id: str) -> str: ...
 
 
-_STEP_SYSTEM_PROMPT = """你是 Sunday，一个运行在用户本地电脑上的个人 AI 智能体助手。\
-你不是 Claude、GPT 或任何其他 AI 产品，你就是 Sunday。
-
-当前步骤：{intent}
-期望输出：{expected_output}
-成功标准：{success_criteria}
-
-执行原则：
-- 直接执行，不解释过程
-- 如果有可用工具，优先使用工具完成任务
-- 工具调用有次数限制，信息足够时请直接输出结果，不要过度收集
-- 任务完成后直接停止，不要继续调用工具
-- 如果无需工具即可完成，直接输出结果
-- 需要将结果保存为文件时，只提供文件名（如 report.md）即可，系统会自动存入对应目录
-"""
+class _LastToolCall(NamedTuple):
+    name: str
+    arguments_str: str
 
 
 class Executor:
@@ -62,6 +50,12 @@ class Executor:
     ) -> None:
         self.config = config
         self.tool_registry = tool_registry
+        self._system_prompt: str | None = None
+
+    def _get_system_prompt(self) -> str:
+        if self._system_prompt is None:
+            self._system_prompt = self.config.load_prompt("executor_system")
+        return self._system_prompt
 
     async def run(self, step: Step, state: AgentState) -> StepResult:
         """执行单个步骤，返回 StepResult。网络错误转为 FAILED 结果，不向上传播。"""
@@ -82,11 +76,11 @@ class Executor:
 
     async def _run_inner(self, step: Step, state: AgentState) -> StepResult:
         """实际执行逻辑（由 run() 包裹以统一捕获网络异常）。"""
-        model_cfg = self.config.model
+        model_cfg: ModelConfig = self.config.model
         max_steps = self.config.reasoning.max_steps
         api_key = model_cfg.get_api_key()
 
-        system = _STEP_SYSTEM_PROMPT.format(
+        system = self._get_system_prompt().format(
             intent=step.intent,
             expected_output=step.expected_output,
             success_criteria=step.success_criteria,
@@ -94,7 +88,7 @@ class Executor:
         messages = [{"role": "user", "content": step.intent}]
         tools = self.tool_registry.get_schemas() if self.tool_registry else []
         iterations: list[ReactIteration] = []
-        last_tool_call: tuple[str, str] | None = None
+        last_tool_call: _LastToolCall | None = None
 
         for i in range(max_steps):
             # 最后一次机会：禁用工具，强制模型整合已有信息直接输出
@@ -103,13 +97,9 @@ class Executor:
                     "role": "user",
                     "content": "你已用完工具调用次数。请根据以上收集到的信息，直接输出最终结果，不要再调用工具。",
                 })
-                response_data = await self._call_llm(
-                    system, messages, [], model_cfg, api_key
-                )
+                response_data = await self._call_llm(system, messages, [], model_cfg, api_key)
                 output = self._extract_text(response_data)
-                logger.warning(
-                    "步骤 %s 达到最大迭代次数 %d，已强制收尾输出", step.id, max_steps
-                )
+                logger.warning("步骤 %s 达到最大迭代次数 %d，已强制收尾输出", step.id, max_steps)
                 return StepResult(
                     step_id=step.id,
                     status=StepStatus.DONE,
@@ -117,9 +107,7 @@ class Executor:
                     react_iterations=iterations,
                 )
 
-            response_data = await self._call_llm(
-                system, messages, tools, model_cfg, api_key
-            )
+            response_data = await self._call_llm(system, messages, tools, model_cfg, api_key)
             finish_reason = response_data.get("stop_reason") or response_data.get(
                 "finish_reason", "stop"
             )
@@ -146,13 +134,18 @@ class Executor:
                 )
 
             tool_name, arguments_str, tool_call_id = tool_call
-            call_key = (tool_name, arguments_str)
-            if call_key == last_tool_call:
+            current_call = _LastToolCall(tool_name, arguments_str)
+            if current_call == last_tool_call:
                 raise RepetitionError(f"连续重复调用工具 {tool_name}，参数：{arguments_str}")
-            last_tool_call = call_key
+            last_tool_call = current_call
 
-            # 执行工具
-            arguments = json.loads(arguments_str) if arguments_str else {}
+            # 执行工具（arguments_str 可能为格式错误的 JSON，容错处理）
+            try:
+                arguments = json.loads(arguments_str) if arguments_str else {}
+            except json.JSONDecodeError:
+                logger.warning("工具 %s 参数 JSON 解析失败，使用空参数。原文：%s", tool_name, arguments_str[:200])
+                arguments = {}
+
             if self.tool_registry:
                 observation = await self.tool_registry.execute(
                     tool_name, arguments, state.session_id
@@ -169,8 +162,6 @@ class Executor:
 
             # 按 provider 使用正确的消息格式追加工具调用和结果
             if model_cfg.provider == "anthropic":
-                # Anthropic：assistant 消息含原始 content blocks（包含 tool_use），
-                # 工具结果用 tool_result block
                 messages.append({
                     "role": "assistant",
                     "content": response_data.get("content", []),
@@ -184,8 +175,7 @@ class Executor:
                     }],
                 })
             else:
-                # OpenAI 兼容（DeepSeek、Qwen 等）：assistant 消息含 tool_calls 数组，
-                # 工具结果用 role="tool" + tool_call_id
+                # OpenAI 兼容（DeepSeek、Qwen 等）
                 messages.append({
                     "role": "assistant",
                     "content": None,
@@ -204,7 +194,7 @@ class Executor:
     # ── 内部 LLM 调用（执行阶段 temperature=0） ────────────────────────────
 
     async def _call_llm(
-        self, system: str, messages: list, tools: list, model_cfg, api_key: str
+        self, system: str, messages: list, tools: list, model_cfg: "ModelConfig", api_key: str
     ) -> dict:
         return await LLMClient.call(
             model_cfg, api_key, messages,

@@ -70,7 +70,7 @@ async def test_register_cli_tools_adds_to_registry(tmp_path):
     }))
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         settings = Settings()
 

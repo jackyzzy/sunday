@@ -1,4 +1,4 @@
-"""Phase 2：Verifier — 结果验证 + 摘要生成"""
+"""Phase 2：Verifier — 结果验证 + 顶层评估"""
 from __future__ import annotations
 
 import json
@@ -9,59 +9,12 @@ from pydantic import BaseModel
 
 from sunday.agent.llm_client import LLMClient
 from sunday.agent.models import AgentState, Step, StepResult, TeamResult
+from sunday.agent.utils import strip_code_fence
 
 if TYPE_CHECKING:
-    from sunday.config import SundayConfig
+    from sunday.config import ModelConfig, SundayConfig
 
 logger = logging.getLogger(__name__)
-
-_VERIFY_PROMPT = """你是一个严格的任务验证器。
-
-步骤意图：{intent}
-成功标准：{success_criteria}
-实际输出：{output}
-
-请判断实际输出是否满足成功标准。
-
-以 JSON 格式输出：
-{{
-  "passed": true/false,
-  "reason": "判断理由（一句话）",
-  "should_replan": true/false
-}}
-
-规则：
-- passed=true 仅当实际输出完全满足成功标准
-- should_replan=true 表示换个方案可能成功
-- should_replan=false 表示该步骤本身无意义或任务已自然完成
-
-只输出 JSON，不要任何额外说明。"""
-
-_SUMMARIZE_PROMPT = """请根据以下任务执行结果，生成一份简洁的结果摘要。
-
-任务：{task}
-
-执行步骤和结果：
-{steps_summary}
-
-要求：
-- 说明是否完成了任务
-- 列出关键输出或结论
-- 如有失败步骤，简要说明原因
-- 长度控制在 3~5 句话"""
-
-_EVALUATE_PROMPT = """请根据以下多个 Team 的执行结果，对整体任务完成情况做出评估和总结。
-
-任务：{task}
-
-各 Team 执行结果：
-{results_summary}
-
-要求：
-- 综合评估整体任务是否完成
-- 列出关键输出和结论
-- 如有失败项，简要说明影响
-- 长度控制在 3~5 句话"""
 
 
 class VerifyResult(BaseModel):
@@ -73,21 +26,32 @@ class VerifyResult(BaseModel):
 
 
 class Verifier:
-    """负责验证每步执行结果，并生成最终摘要。验证阶段 temperature=0。"""
+    """负责验证每步执行结果，并生成最终评估摘要。验证阶段 temperature=0。"""
 
     def __init__(self, config: "SundayConfig") -> None:
         self.config = config
+        self._verify_prompt: str | None = None
+        self._evaluate_prompt: str | None = None
+
+    def _get_verify_prompt(self) -> str:
+        if self._verify_prompt is None:
+            self._verify_prompt = self.config.load_prompt("verify")
+        return self._verify_prompt
+
+    def _get_evaluate_prompt(self) -> str:
+        if self._evaluate_prompt is None:
+            self._evaluate_prompt = self.config.load_prompt("evaluate")
+        return self._evaluate_prompt
 
     async def check(self, step: Step, result: StepResult, state: AgentState) -> VerifyResult:
         """对照 success_criteria 判断步骤结果是否通过。"""
         if not step.success_criteria.strip():
-            # 无验证标准时默认通过
             return VerifyResult(passed=True, reason="无成功标准，默认通过")
 
-        model_cfg = self.config.model
+        model_cfg: ModelConfig = self.config.model
         api_key = model_cfg.get_api_key()
 
-        prompt = _VERIFY_PROMPT.format(
+        prompt = self._get_verify_prompt().format(
             intent=step.intent,
             success_criteria=step.success_criteria,
             output=result.output[:2000],
@@ -102,7 +66,7 @@ class Verifier:
 
     async def evaluate(self, state: AgentState, team_results: list[TeamResult]) -> str:
         """顶层评估：基于所有 Team 结果生成整体任务摘要。"""
-        model_cfg = self.config.model
+        model_cfg: ModelConfig = self.config.model
         api_key = model_cfg.get_api_key()
 
         results_summary = "\n".join(
@@ -112,7 +76,7 @@ class Verifier:
         if not results_summary:
             results_summary = "无执行记录"
 
-        prompt = _EVALUATE_PROMPT.format(
+        prompt = self._get_evaluate_prompt().format(
             task=state.task,
             results_summary=results_summary,
         )
@@ -127,46 +91,14 @@ class Verifier:
                 f"（评估生成失败：{e}）"
             )
 
-    async def summarize(self, state: AgentState) -> str:
-        """生成最终结果摘要。LLM 调用失败时降级为本地摘要，不抛出异常。"""
-        model_cfg = self.config.model
-        api_key = model_cfg.get_api_key()
-
-        steps_summary = "\n".join(
-            f"- 步骤 {r.step_id}（{r.status.value}）：{r.output[:200]}"
-            for r in state.step_results
-        )
-        if not steps_summary:
-            steps_summary = "无执行记录"
-
-        prompt = _SUMMARIZE_PROMPT.format(
-            task=state.task,
-            steps_summary=steps_summary,
-        )
-        try:
-            return await self._call_llm(prompt, model_cfg, api_key)
-        except Exception as e:
-            logger.warning("summarize LLM 调用失败（%s），使用本地摘要降级", e)
-            done = [r for r in state.step_results if r.status.value == "done"]
-            failed = [r for r in state.step_results if r.status.value == "failed"]
-            return (
-                f"任务：{state.task}\n"
-                f"完成步骤：{len(done)}/{len(state.step_results)}，"
-                f"失败步骤：{len(failed)}。\n"
-                f"（摘要生成失败：{e}）"
-            )
-
     # ── 内部 LLM 调用（验证阶段 temperature=0） ───────────────────────────
 
-    async def _call_llm(self, prompt: str, model_cfg, api_key: str) -> str:
+    async def _call_llm(self, prompt: str, model_cfg: "ModelConfig", api_key: str) -> str:
         return await LLMClient.call_text(model_cfg, api_key, prompt, max_tokens=1024, timeout=60)
 
     @staticmethod
     def _parse_verify_result(raw: str) -> VerifyResult:
-        text = raw.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        text = strip_code_fence(raw)
         try:
             data = json.loads(text)
             return VerifyResult(

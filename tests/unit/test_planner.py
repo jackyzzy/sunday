@@ -9,6 +9,7 @@ import yaml
 
 from sunday.agent.models import AgentState, StepStatus
 from sunday.agent.planner import THINKING_BUDGET, Planner, ThinkingLevel
+from sunday.agent.utils import strip_code_fence
 
 
 def _make_settings(tmp_path, provider="anthropic"):
@@ -21,9 +22,11 @@ def _make_settings(tmp_path, provider="anthropic"):
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
         "OPENAI_API_KEY": "sk-openai-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
-        return Settings()
+        s = Settings()
+        _ = s.sunday  # 触发 cached_property，确保在 patch.dict 上下文内读取正确配置
+        return s
 
 
 def _plan_response(goal: str = "完成任务", n_steps: int = 2) -> dict:
@@ -265,19 +268,19 @@ def test_split_thinking_no_tag_returns_raw():
 def test_strip_code_fence_json_block():
     """去除 ```json...``` 包裹"""
     text = "```json\n{\"key\": 1}\n```"
-    assert Planner._strip_code_fence(text) == '{"key": 1}'
+    assert strip_code_fence(text) == '{"key": 1}'
 
 
 def test_strip_code_fence_plain_block():
     """去除 ```...``` 包裹（无语言标识符）"""
     text = "```\n{\"key\": 1}\n```"
-    assert Planner._strip_code_fence(text) == '{"key": 1}'
+    assert strip_code_fence(text) == '{"key": 1}'
 
 
 def test_strip_code_fence_no_fence():
     """无代码块时原文返回"""
     text = '{"key": 1}'
-    assert Planner._strip_code_fence(text) == text
+    assert strip_code_fence(text) == text
 
 
 async def test_replan_handles_markdown_wrapped_json(tmp_path):

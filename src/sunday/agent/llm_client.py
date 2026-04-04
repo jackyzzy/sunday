@@ -1,7 +1,12 @@
 """共享 LLM 调用客户端 — 消除 Planner/Executor/Verifier/MemoryManager 中的重复代码"""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx
+
+if TYPE_CHECKING:
+    from sunday.config import ModelConfig
 
 
 class LLMClient:
@@ -12,7 +17,7 @@ class LLMClient:
 
     @staticmethod
     async def call(
-        model_cfg,
+        model_cfg: "ModelConfig",
         api_key: str,
         messages: list[dict],
         *,
@@ -52,7 +57,7 @@ class LLMClient:
 
     @staticmethod
     async def call_text(
-        model_cfg,
+        model_cfg: "ModelConfig",
         api_key: str,
         prompt: str,
         *,
@@ -108,7 +113,7 @@ class LLMClient:
 
     @staticmethod
     async def _call_anthropic(
-        model_cfg, api_key: str, messages: list[dict], *,
+        model_cfg: "ModelConfig", api_key: str, messages: list[dict], *,
         system: str, tools: list[dict] | None, max_tokens: int,
         temperature: float, thinking_budget: int, timeout: float,
     ) -> dict:
@@ -168,7 +173,7 @@ class LLMClient:
 
     @staticmethod
     async def _call_openai(
-        model_cfg, api_key: str, messages: list[dict], *,
+        model_cfg: "ModelConfig", api_key: str, messages: list[dict], *,
         system: str, tools: list[dict] | None, max_tokens: int,
         temperature: float, timeout: float,
     ) -> dict:
@@ -209,15 +214,8 @@ class LLMClient:
         msg = choice["message"]
         raw_text = msg.get("content") or ""
 
-        # 剥离 DeepSeek / 通用 chain-of-thought <think>...</think> 标签
-        thinking: str | None = None
-        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("<think>", "</think>")]:
-            if open_tag in raw_text and close_tag in raw_text:
-                start = raw_text.index(open_tag) + len(open_tag)
-                end = raw_text.index(close_tag)
-                thinking = raw_text[start:end].strip()
-                raw_text = raw_text[raw_text.index(close_tag) + len(close_tag):].strip()
-                break
+        # 剥离 DeepSeek / 通用 chain-of-thought 标签（复用 split_thinking）
+        thinking, raw_text = LLMClient.split_thinking(raw_text)
 
         result: dict = {
             "finish_reason": choice["finish_reason"],

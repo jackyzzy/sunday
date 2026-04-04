@@ -102,10 +102,11 @@ def load_skill_tools(skills_dir: Path, registry: "ToolRegistry") -> int:
             if meta is None:
                 continue
             _sh_path = str(sh_file)
+            _sh_timeout = meta.timeout
 
-            async def _run_sh(_p: str = _sh_path, **kwargs: object) -> str:
+            async def _run_sh(_p: str = _sh_path, _t: int = _sh_timeout, **kwargs: object) -> str:
                 args = " ".join(str(v) for v in kwargs.values())
-                return await _shell_exec(f"bash {_p} {args}")
+                return await _shell_exec(f"bash {_p} {args}", timeout=_t)
 
             registry.register(meta, _run_sh)
             count += 1
@@ -177,8 +178,8 @@ def _parse_sh_frontmatter(sh_file: Path):
         return None
 
 
-async def _shell_exec(cmd: str) -> str:
-    """执行 shell 命令，返回 stdout + stderr。"""
+async def _shell_exec(cmd: str, timeout: int = 30) -> str:
+    """执行 shell 命令，返回 stdout + stderr。timeout 单位为秒。"""
     import asyncio
 
     try:
@@ -187,12 +188,12 @@ async def _shell_exec(cmd: str) -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         out = stdout.decode(errors="replace").strip()
         err = stderr.decode(errors="replace").strip()
         parts = [p for p in [out, f"[stderr] {err}" if err else ""] if p]
         return "\n".join(parts) if parts else ""
     except asyncio.TimeoutError:
-        return "[超时] Shell 命令超过 60 秒"
+        return f"[超时] Shell 命令超过 {timeout} 秒"
     except Exception as e:
         return f"[错误] Shell 执行失败：{e}"

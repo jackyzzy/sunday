@@ -66,7 +66,7 @@ async def test_status_updates_on_event():
     app = SundayApp(gateway_url="ws://localhost:7899", auto_connect=False)
     async with app.run_test(headless=True) as pilot:
         await pilot.app.handle_gateway_event(
-            {"type": EventType.STATUS.value, "data": {"state": "thinking"},
+            {"type": EventType.STATUS.value, "data": {"status": "thinking"},
              "session_id": "s1", "ts": ""}
         )
         bar = pilot.app.query_one(StatusBar)

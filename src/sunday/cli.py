@@ -54,22 +54,14 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
     """实际执行任务的异步函数（Phase 4：接入工具系统与技能）"""
     import uuid
 
-    from sunday.agent.executor import Executor
-    from sunday.agent.loop import AgentLoop
     from sunday.agent.models import AgentState, ThinkingLevel
-    from sunday.agent.planner import Planner
-    from sunday.agent.verifier import Verifier
+    from sunday.bootstrap import build_agent_loop
     from sunday.config import settings
-    from sunday.memory.context import ContextBuilder
-    from sunday.memory.manager import MemoryManager
-    from sunday.skills.loader import SkillLoader
-    from sunday.tools.cli_tool import register_cli_tools
-    from sunday.tools.registry import ToolRegistry
+
+    cfg_settings = settings
 
     # 如果指定了 model_override，临时调整 settings
-    cfg_settings = settings
     if model_override:
-        # 简单做法：直接用 SimpleAgent 兼容 model override
         try:
             from sunday.agent.simple import SimpleAgent
             click.echo(f"任务：{task}")
@@ -147,33 +139,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
             except click.exceptions.Abort:
                 return False
 
-        # 工具注册表
-        registry = ToolRegistry(cfg, confirmation_handler=cli_confirm)
-        register_cli_tools(registry)
-        from sunday.tools.local_loader import load_skill_tools, load_user_tools
-        project_skills_dir = cfg.agent.workspace_dir.parent.parent / "skills"
-        load_skill_tools(project_skills_dir, registry)
-        load_user_tools(cfg.agent.workspace_dir, registry)
-
-        # 技能加载器（注入 ContextBuilder 用于 L0 摘要）
-        workspace_dir = cfg.agent.workspace_dir
-        skill_loader = SkillLoader(
-            project_skills_dir=workspace_dir.parent.parent / "skills",
-            user_skills_dir=workspace_dir / "skills",
-        )
-        skill_loader.discover()
-
-        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader, config=cfg)
-        memory_manager = MemoryManager(workspace_dir, config=cfg)
-        loop = AgentLoop(
-            planner=Planner(cfg),
-            executor=Executor(cfg, tool_registry=registry),
-            verifier=Verifier(cfg),
-            emit=cli_emit,
-            context_builder=context_builder,
-            memory_manager=memory_manager,
-            config=cfg,
-        )
+        loop = build_agent_loop(cfg, cli_emit, mode="cli", confirmation_handler=cli_confirm)
         result = await loop.run(state)
         click.echo("\n" + "─" * 50)
         click.echo(result)

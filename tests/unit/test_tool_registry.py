@@ -23,9 +23,11 @@ def _make_settings(tmp_path, allow_list=None, deny_list=None, timeout=30):
     }))
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
-        "SUNDAY_CONFIG_FILE": str(config_file),
+        "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
-        return Settings()
+        s = Settings()
+        _ = s.sunday  # 触发 cached_property
+        return s
 
 
 def _make_meta(name="test_tool", dangerous=False) -> ToolMeta:

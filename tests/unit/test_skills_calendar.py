@@ -45,16 +45,14 @@ def test_calendar_update_event_is_dangerous():
     assert callable(update_event)
 
 
-def test_calendar_no_credentials_error():
+async def test_calendar_no_credentials_error():
     """无凭证文件时返回友好错误提示"""
-    import asyncio
-
     from skills.calendar.tools import list_events  # noqa: PLC0415
 
     with patch(
         "skills.calendar.tools._get_credentials_path", return_value=Path("/nonexistent/path")
     ):
-        result = asyncio.get_event_loop().run_until_complete(list_events())
+        result = await list_events()
     assert "[错误]" in result
     assert any(kw in result for kw in ("凭证", "配置", "依赖", "credentials", "google"))
 
