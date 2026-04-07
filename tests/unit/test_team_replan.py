@@ -11,14 +11,14 @@ from sunday.agent.models import AgentState, Plan, Step, StepResult, StepStatus, 
 from sunday.agent.verifier import VerifyResult
 
 
-def _make_config(tmp_path, max_sub_replans: int = 1):
-    """创建最小化 SundayConfig，注入 max_sub_replans 参数。"""
+def _make_config(tmp_path, max_replans_per_step: int = 1):
+    """创建最小化 SundayConfig，注入 max_replans_per_step 参数。"""
     from sunday.config import Settings
 
     config_file = tmp_path / "agent.yaml"
     config_file.write_text(yaml.dump({
         "model": {"provider": "openai", "id": "test-model", "api_key_env": "FAKE_KEY"},
-        "reasoning": {"max_steps": 5, "max_sub_replans": max_sub_replans},
+        "reasoning": {"max_react_iteration": 5, "max_replans_per_step": max_replans_per_step},
     }))
     with patch.dict(os.environ, {"FAKE_KEY": "sk-fake", "SUNDAY_CONFIGS_DIR": str(tmp_path)}):
         s = Settings()
@@ -51,7 +51,7 @@ async def test_team_inner_replan_success(tmp_path):
     """子步骤首次失败 → 触发内层重规划 → 新子步骤通过 → TeamResult.passed=True"""
     from sunday.agent.team import Team
 
-    cfg = _make_config(tmp_path, max_sub_replans=1)
+    cfg = _make_config(tmp_path, max_replans_per_step=1)
     parent_step = _make_step("s1", "完成某个任务")
     parent_state = _make_state()
 
@@ -112,7 +112,7 @@ async def test_team_inner_replan_exhausted(tmp_path):
     """
     from sunday.agent.team import Team
 
-    cfg = _make_config(tmp_path, max_sub_replans=1)
+    cfg = _make_config(tmp_path, max_replans_per_step=1)
     parent_step = _make_step("s1")
     parent_state = _make_state()
 
@@ -159,7 +159,7 @@ async def test_team_inner_replan_returns_empty(tmp_path):
     """replan 返回空列表 → 立即停止，不挂起"""
     from sunday.agent.team import Team
 
-    cfg = _make_config(tmp_path, max_sub_replans=1)
+    cfg = _make_config(tmp_path, max_replans_per_step=1)
     parent_step = _make_step("s1")
     parent_state = _make_state()
 

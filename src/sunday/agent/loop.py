@@ -88,6 +88,11 @@ class AgentLoop:
             # THINK + PLAN
             plan = await self.planner.think_and_plan(state)
             state.plan = plan
+            max_steps = self.config.reasoning.max_steps if self.config else 10
+            if len(plan.steps) > max_steps:
+                logger.warning("计划步骤数 %d 超过上限 %d，已截断", len(plan.steps), max_steps)
+                plan.steps = plan.steps[:max_steps]
+                state.plan = plan
             await logged_emit(state.session_id, "plan", {
                 "goal": plan.goal,
                 "steps": [s.model_dump() for s in plan.steps],
@@ -131,8 +136,7 @@ class AgentLoop:
         - max_replans_total：整个任务的兜底上限，防止整体失控
         """
         reasoning = self.config.reasoning if self.config else None
-        max_per_step = reasoning.max_replans_per_step if reasoning else 2
-        max_total = reasoning.max_replans_total if reasoning else 10
+        max_replans = reasoning.max_replans if reasoning else 10
 
         steps = list(state.plan.steps)
         idx = 0
@@ -154,7 +158,6 @@ class AgentLoop:
             step.status = StepStatus.RUNNING
             await emit(state.session_id, "status", {"status": f"executing:{step.id}"})
 
-            step_replan_count = 0
             replan_took_over = False  # 重规划接管了后续步骤，跳过本步骤的正常收尾
             while True:
                 if step.is_simple:
@@ -170,17 +173,14 @@ class AgentLoop:
 
                 step.status = StepStatus.FAILED
                 can_replan = (
-                    step_replan_count < max_per_step
-                    and total_replan_count < max_total
+                    total_replan_count < max_replans
                     and team_result.should_replan
                 )
                 if can_replan:
-                    step_replan_count += 1
                     total_replan_count += 1
                     logger.info(
-                        "步骤 %s 失败，触发局部重规划（步骤第 %d/%d 次，全局第 %d/%d 次）",
-                        step.id, step_replan_count, max_per_step,
-                        total_replan_count, max_total,
+                        "步骤 %s 失败，触发局部重规划（全局第 %d/%d 次）",
+                        step.id, total_replan_count, max_replans,
                     )
                     await emit(state.session_id, "status", {"status": "replanning"})
                     new_steps = await self._try_replan(step, team_result, state)
@@ -193,16 +193,10 @@ class AgentLoop:
                     # 无论重规划是否产出新步骤，本步骤的重试均结束
                     break
                 else:
-                    if step_replan_count >= max_per_step:
-                        logger.warning(
-                            "步骤 %s 已达单步重规划上限 %d，继续执行后续步骤",
-                            step.id, max_per_step,
-                        )
-                    else:
-                        logger.warning(
-                            "步骤 %s 失败，全局重规划已达上限 %d，继续执行后续步骤",
-                            step.id, max_total,
-                        )
+                    logger.warning(
+                        "步骤 %s 失败，全局重规划已达上限 %d，继续执行后续步骤",
+                        step.id, max_replans,
+                    )
                     break
 
             if replan_took_over:

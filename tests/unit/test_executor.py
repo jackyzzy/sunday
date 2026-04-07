@@ -21,7 +21,7 @@ def _make_settings(tmp_path, provider="anthropic", base_url=None, api_key_env=No
     config_file = tmp_path / "agent.yaml"
     config_file.write_text(yaml.dump({
         "model": model_cfg,
-        "reasoning": {"max_steps": 3},
+        "reasoning": {"max_react_iteration": 3},
     }))
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",

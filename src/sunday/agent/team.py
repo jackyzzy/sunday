@@ -64,7 +64,7 @@ class Team:
         logger.debug("Team %s 子规划完成，共 %d 个子步骤", step.id, len(sub_plan.steps))
 
         # 串行执行子步骤（支持内层重规划）
-        max_sub_replans = self.planner.config.reasoning.max_sub_replans
+        max_sub_replans = self.planner.config.reasoning.max_replans_per_step
         sub_steps = list(sub_plan.steps)
         idx = 0
         # P2：每个子步骤独立计数，互不影响

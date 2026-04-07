@@ -77,7 +77,7 @@ class Executor:
     async def _run_inner(self, step: Step, state: AgentState) -> StepResult:
         """实际执行逻辑（由 run() 包裹以统一捕获网络异常）。"""
         model_cfg: ModelConfig = self.config.model
-        max_steps = self.config.reasoning.max_steps
+        max_steps = self.config.reasoning.max_react_iteration
         api_key = model_cfg.get_api_key()
 
         system = self._get_system_prompt().format(

@@ -70,11 +70,11 @@ class ModelConfig(BaseModel):
 class ReasoningConfig(BaseModel):
     """推理与思考配置"""
 
-    max_steps: int = 15
-    max_replans_per_step: int = 3   # 每个步骤最多重规划次数
-    max_replans_total: int = 10     # 整个任务重规划总上限（防护兜底）
-    max_sub_replans: int = 3        # Team 内每个子任务最多重规划次数
-    thinking_level: str = "medium"  # off | minimal | low | medium | high
+    max_steps: int = 10                # 任务顶层步骤数上限（超出则截断）
+    max_react_iteration: int = 5       # 单步内 ReAct 工具调用轮次上限
+    max_replans_per_step: int = 3      # Team 内层子步骤重规划上限
+    max_replans: int = 5               # 整任务外层重规划总上限（外层唯一限制）
+    thinking_level: str = "medium"     # off | minimal | low | medium | high
     thinking_budget_tokens: int = 4096
 
 
