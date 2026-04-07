@@ -34,6 +34,7 @@ class Step(BaseModel):
     success_criteria: str = ""
     depends_on: list[str] = Field(default_factory=list)
     status: StepStatus = StepStatus.PENDING
+    is_simple: bool = False  # 规划器标注：True=意图单一可直接执行，False=需子规划
 
 
 class Plan(BaseModel):

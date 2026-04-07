@@ -95,8 +95,8 @@ class Team:
                 idx += 1
                 continue
 
-            # 子步骤失败：尝试内层重规划
-            if sub_replan_count < max_sub_replans:
+            # 子步骤失败：尝试内层重规划（仅当验证器认为重规划有意义时）
+            if sub_replan_count < max_sub_replans and verify.should_replan:
                 sub_replan_count += 1
                 logger.info(
                     "Team %s 子步骤 %s 失败，触发子任务重规划（%d/%d）",

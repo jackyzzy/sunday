@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from sunday.agent.executor import Executor
 from sunday.agent.models import AgentState, StepStatus, TeamResult
 from sunday.agent.planner import Planner
+from sunday.agent.simple import SimpleNode
 from sunday.agent.team import Team
 from sunday.agent.utils import EmitCallable, noop_emit
 from sunday.agent.verifier import Verifier
@@ -156,8 +157,12 @@ class AgentLoop:
             step_replan_count = 0
             replan_took_over = False  # 重规划接管了后续步骤，跳过本步骤的正常收尾
             while True:
-                team = Team(self.config, self.executor.tool_registry, emit=emit)
-                team_result = await team.run(step, state)
+                if step.is_simple:
+                    node = SimpleNode(self.config, self.executor.tool_registry, emit=emit)
+                    team_result = await node.run(step, state)
+                else:
+                    team = Team(self.config, self.executor.tool_registry, emit=emit)
+                    team_result = await team.run(step, state)
 
                 if team_result.passed:
                     step.status = StepStatus.DONE

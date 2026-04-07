@@ -176,9 +176,10 @@ class Executor:
                 })
             else:
                 # OpenAI 兼容（DeepSeek、Qwen 等）
+                # content 用 "" 而非 None：部分 provider（DeepSeek）拒绝 null content
                 messages.append({
                     "role": "assistant",
-                    "content": None,
+                    "content": "",
                     "tool_calls": [{
                         "id": tool_call_id,
                         "type": "function",

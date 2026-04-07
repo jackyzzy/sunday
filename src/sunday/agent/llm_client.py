@@ -206,6 +206,11 @@ class LLMClient:
             resp = await client.post(
                 f"{base}/chat/completions", headers=headers, json=body
             )
+            if not resp.is_success:
+                import logging
+                logging.getLogger(__name__).error(
+                    "LLM API %d 错误，响应体：%s", resp.status_code, resp.text[:500]
+                )
             resp.raise_for_status()
             data = resp.json()
 

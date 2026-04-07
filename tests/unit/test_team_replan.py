@@ -76,9 +76,10 @@ async def test_team_inner_replan_success(tmp_path):
     mock_executor = MagicMock()
     mock_executor.run = mock_executor_run
 
-    # Verifier：result.verified 直接反映 Executor 输出
+    # Verifier：result.verified 直接反映 Executor 输出；失败时 should_replan=True
     async def mock_verifier_check(step, result, state):
-        return VerifyResult(passed=result.verified, reason="mock")
+        return VerifyResult(passed=result.verified, reason="mock",
+                            should_replan=not result.verified)
 
     mock_verifier = MagicMock()
     mock_verifier.check = mock_verifier_check
@@ -128,7 +129,8 @@ async def test_team_inner_replan_exhausted(tmp_path):
         return _failed_result(step.id)  # sub2 和 sub2_retry 都失败
 
     async def mock_verifier_check(step, result, state):
-        return VerifyResult(passed=result.verified, reason="mock")
+        return VerifyResult(passed=result.verified, reason="mock",
+                            should_replan=not result.verified)
 
     mock_executor = MagicMock()
     mock_executor.run = mock_executor_run
@@ -173,7 +175,7 @@ async def test_team_inner_replan_returns_empty(tmp_path):
         return _failed_result(step.id)
 
     async def mock_verifier_check(step, result, state):
-        return VerifyResult(passed=False, reason="mock")
+        return VerifyResult(passed=False, reason="mock", should_replan=True)
 
     mock_executor = MagicMock()
     mock_executor.run = mock_executor_run

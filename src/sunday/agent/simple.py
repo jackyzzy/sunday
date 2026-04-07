@@ -1,4 +1,7 @@
-"""Phase 1 临时实现：直接 LLM 调用，不走完整 Agent Loop"""
+"""simple.py — 两个轻量执行组件：
+- SimpleAgent：Phase 1 遗留，直接 LLM 调用（CLI --model-override 快速路径使用）
+- SimpleNode：两层架构中的简单步骤执行节点，接口与 Team 一致
+"""
 from __future__ import annotations
 
 from sunday.config import Settings
@@ -117,3 +120,40 @@ class SimpleAgent:
 
         parts.append(f"\n当前日期：{date.today().isoformat()}")
         return "\n\n---\n\n".join(p for p in parts if p.strip())
+
+
+class SimpleNode:
+    """执行单个简单 Step 的轻量节点（无子规划，单次 ReAct + 验证）。
+
+    接口与 Team 一致：run(step, parent_state) → TeamResult。
+    tool_registry 由顶层传入，与 Team 共享同一注册表。
+    """
+
+    def __init__(self, config, tool_registry, emit=None) -> None:
+        from sunday.agent.executor import Executor
+        from sunday.agent.utils import noop_emit
+        from sunday.agent.verifier import Verifier
+
+        self.executor = Executor(config, tool_registry=tool_registry)
+        self.verifier = Verifier(config)
+        self.emit = emit or noop_emit
+
+    async def run(self, step, parent_state) -> "TeamResult":
+        from sunday.agent.executor import MaxStepsError, RepetitionError
+        from sunday.agent.models import StepResult, StepStatus, TeamResult
+
+        session_id = parent_state.session_id
+        await self.emit(session_id, "status", {"status": f"simple:{step.id}"})
+        try:
+            result = await self.executor.run(step, parent_state)
+        except (MaxStepsError, RepetitionError) as e:
+            result = StepResult(step_id=step.id, status=StepStatus.FAILED, output=str(e))
+        verify = await self.verifier.check(step, result, parent_state)
+        result.verified = verify.passed
+        result.verify_reason = verify.reason
+        return TeamResult(
+            step_id=step.id,
+            passed=verify.passed,
+            output=result.output,
+            sub_steps=[result],
+        )
