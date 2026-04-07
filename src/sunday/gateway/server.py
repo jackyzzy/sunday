@@ -41,6 +41,8 @@ class Gateway:
         self._running_tasks: dict[str, asyncio.Task] = {}
         # session_id → Future（等待用户确认）
         self._pending_confirms: dict[str, asyncio.Future] = {}
+        # 信任模式会话集合：在此集合中的 session 跳过所有危险操作确认
+        self._trusted_sessions: set[str] = set()
 
         # 测试注入点：替换 AgentLoop.run
         self._mock_loop_run: Callable | None = None
@@ -176,6 +178,12 @@ class Gateway:
                 "command": "history",
                 "events": history,
             })
+        elif command == "trust":
+            self._trusted_sessions.add(session_id)
+            await self.emit(session_id, EventType.SLASH_RESULT, {
+                "command": "trust",
+                "message": "当前会话已启用信任模式，所有危险操作将自动确认。",
+            })
         else:
             await self.emit(session_id, EventType.SLASH_RESULT, {
                 "command": command,
@@ -231,6 +239,8 @@ class Gateway:
         cfg = self._settings.sunday  # SundayConfig
 
         async def gw_confirm(tool_name: str, arguments: dict, _sid: str) -> bool:
+            if session_id in self._trusted_sessions:
+                return True
             return await self.request_confirm(tool_name, arguments, session_id)
 
         async def loop_emit(sid: str, event_type, data: dict) -> None:

@@ -45,12 +45,13 @@ def tui(port):
               type=click.Choice(["off", "minimal", "low", "medium", "high"]),
               help="思考深度")
 @click.option("--model", "-m", default=None, help="临时指定模型（格式：provider/model-id）")
-def run(task, thinking, model):
+@click.option("--yes", "-y", is_flag=True, default=False, help="自动确认所有危险操作（跳过交互提示）")
+def run(task, thinking, model, yes):
     """执行单次任务（非交互模式）"""
-    asyncio.run(_run_task(task, thinking, model))
+    asyncio.run(_run_task(task, thinking, model, yes))
 
 
-async def _run_task(task: str, thinking: str, model_override: str | None):
+async def _run_task(task: str, thinking: str, model_override: str | None, yes: bool = False):
     """实际执行任务的异步函数（Phase 4：接入工具系统与技能）"""
     import uuid
 
@@ -128,6 +129,9 @@ async def _run_task(task: str, thinking: str, model_override: str | None):
 
         # CLI 确认处理器：stdin 读取 y/n；非交互模式自动拒绝
         async def cli_confirm(tool_name: str, arguments: dict, session_id: str) -> bool:
+            if yes:
+                click.echo(f"[--yes] 自动确认工具 '{tool_name}'")
+                return True
             click.echo(f"\n⚠️  工具 '{tool_name}' 是不可逆操作，参数：{arguments}")
             import sys
             if not sys.stdin.isatty():
