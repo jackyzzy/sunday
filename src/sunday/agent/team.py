@@ -67,8 +67,10 @@ class Team:
         max_sub_replans = self.planner.config.reasoning.max_sub_replans
         sub_steps = list(sub_plan.steps)
         idx = 0
-        sub_replan_count = 0
+        # P2：每个子步骤独立计数，互不影响
+        sub_replan_counts: dict[str, int] = {}
         broke_on_failure = False
+        last_verify_should_replan = True  # P1：记录最后失败步骤的 should_replan
 
         while idx < len(sub_steps):
             sub_step = sub_steps[idx]
@@ -95,15 +97,19 @@ class Team:
                 idx += 1
                 continue
 
-            # 子步骤失败：尝试内层重规划（仅当验证器认为重规划有意义时）
-            if sub_replan_count < max_sub_replans and verify.should_replan:
-                sub_replan_count += 1
+            # 子步骤失败：尝试内层重规划（仅当验证器认为有意义时）
+            step_replan_count = sub_replan_counts.get(sub_step.id, 0)
+            if step_replan_count < max_sub_replans and verify.should_replan:
+                sub_replan_counts[sub_step.id] = step_replan_count + 1
                 logger.info(
                     "Team %s 子步骤 %s 失败，触发子任务重规划（%d/%d）",
-                    step.id, sub_step.id, sub_replan_count, max_sub_replans,
+                    step.id, sub_step.id, step_replan_count + 1, max_sub_replans,
                 )
                 try:
-                    new_sub_steps = await self.planner.replan(sub_step, result.output, sub_state)
+                    # P0：使用专用的 sub_replan()，而非外层的 replan()
+                    new_sub_steps = await self.planner.sub_replan(
+                        step, sub_step, result.output, sub_state
+                    )
                 except Exception as e:
                     logger.warning("Team %s 子任务重规划失败：%s", step.id, e)
                     new_sub_steps = []
@@ -112,15 +118,22 @@ class Team:
                     continue  # idx 不变，从新子步骤 sub_steps[idx] 开始
 
             logger.info("Team %s 子步骤 %s 验证失败，停止执行", step.id, sub_step.id)
+            last_verify_should_replan = verify.should_replan
             broke_on_failure = True
             break
 
         all_passed = not broke_on_failure
-        output = "\n".join(r.output for r in sub_state.step_results if r.output)
+        # P4：失败子步骤加 ✗ 标注，帮助外层 replan 准确定位失败原因
+        parts = []
+        for r in sub_state.step_results:
+            tag = "✓" if r.verified else "✗(失败)"
+            parts.append(f"[{tag} {r.step_id}] {r.output}")
+        output = "\n".join(parts)
         return TeamResult(
             step_id=step.id,
             passed=all_passed,
             output=output,
+            should_replan=last_verify_should_replan if broke_on_failure else True,
             sub_steps=sub_state.step_results,
         )
 

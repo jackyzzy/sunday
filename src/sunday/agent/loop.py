@@ -172,6 +172,7 @@ class AgentLoop:
                 can_replan = (
                     step_replan_count < max_per_step
                     and total_replan_count < max_total
+                    and team_result.should_replan
                 )
                 if can_replan:
                     step_replan_count += 1

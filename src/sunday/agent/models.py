@@ -89,6 +89,7 @@ class TeamResult(BaseModel):
     step_id: str
     passed: bool
     output: str = ""
+    should_replan: bool = True  # 外层重规划参考：False 表示换方案也无意义
     sub_steps: list[StepResult] = Field(default_factory=list)
 
 

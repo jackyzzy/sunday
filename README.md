@@ -353,7 +353,10 @@ model:
   api_key_env: DEEPSEEK_API_KEY      # 指定从哪个环境变量读取 API key
 
 reasoning:
-  max_steps: 15                      # ReAct 最大步数
+  max_steps: 15                      # ReAct 最大步数（每个子步骤内的工具调用上限）
+  max_replans_per_step: 3            # 每个顶层 Step 最多触发外层重规划次数
+  max_replans_total: 10              # 整个任务外层重规划总上限（防护兜底）
+  max_sub_replans: 3                 # Team 内每个子步骤最多触发内层重规划次数
   thinking_level: medium             # off | minimal | low | medium | high
   thinking_budget_tokens: 4096
 

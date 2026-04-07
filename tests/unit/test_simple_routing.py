@@ -245,7 +245,7 @@ async def test_should_replan_false_skips_team_replan(tmp_path):
     mock_planner.think_and_plan = AsyncMock(
         return_value=Plan(goal="g", steps=[sub1])
     )
-    mock_planner.replan = AsyncMock(return_value=[_step("sub1_retry")])
+    mock_planner.sub_replan = AsyncMock(return_value=[_step("sub1_retry")])
 
     mock_executor = MagicMock()
     mock_executor.run = AsyncMock(return_value=_fail_result("sub1"))
@@ -265,8 +265,8 @@ async def test_should_replan_false_skips_team_replan(tmp_path):
     result = await team.run(parent_step, parent_state)
 
     assert result.passed is False
-    # replan 未被调用
-    mock_planner.replan.assert_not_awaited()
+    # sub_replan 未被调用
+    mock_planner.sub_replan.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -286,7 +286,7 @@ async def test_should_replan_true_triggers_team_replan(tmp_path):
     mock_planner.think_and_plan = AsyncMock(
         return_value=Plan(goal="g", steps=[sub1])
     )
-    mock_planner.replan = AsyncMock(return_value=[sub1_retry])
+    mock_planner.sub_replan = AsyncMock(return_value=[sub1_retry])
 
     async def mock_exec(step, state):
         if step.id == "sub1_retry":
@@ -315,4 +315,4 @@ async def test_should_replan_true_triggers_team_replan(tmp_path):
     result = await team.run(parent_step, parent_state)
 
     assert result.passed is True
-    mock_planner.replan.assert_awaited_once()
+    mock_planner.sub_replan.assert_awaited_once()

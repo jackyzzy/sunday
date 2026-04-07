@@ -35,6 +35,7 @@ class Planner:
         self.system_prompt = system_prompt  # 由 ContextBuilder 注入
         self._plan_prompt: str | None = None
         self._replan_prompt: str | None = None
+        self._sub_replan_prompt: str | None = None
 
     def _get_plan_prompt(self) -> str:
         if self._plan_prompt is None:
@@ -45,6 +46,11 @@ class Planner:
         if self._replan_prompt is None:
             self._replan_prompt = self.config.load_prompt("replan")
         return self._replan_prompt
+
+    def _get_sub_replan_prompt(self) -> str:
+        if self._sub_replan_prompt is None:
+            self._sub_replan_prompt = self.config.load_prompt("sub_replan")
+        return self._sub_replan_prompt
 
     async def think_and_plan(self, state: AgentState, plan_prompt: str | None = None) -> Plan:
         """根据任务和上下文生成结构化 Plan。"""
@@ -116,6 +122,58 @@ class Planner:
             data = json.loads(plan_text)
         except json.JSONDecodeError as e:
             logger.warning("replan 响应 JSON 解析失败（%s），返回空步骤列表。原文：%s", e, plan_text[:200])
+            return []
+        return [Step(**s) for s in data.get("steps", [])]
+
+    async def sub_replan(
+        self,
+        parent_step: "Step",
+        failed_sub_step: "Step",
+        result_output: str,
+        sub_state: "AgentState",
+    ) -> list["Step"]:
+        """Team 内层重规划：替换失败子步骤及其后续子步骤。
+
+        使用独立的 sub_replan.md prompt，从 sub_state.step_results 取已完成子步骤摘要。
+        """
+        model_cfg: ModelConfig = self.config.model
+        api_key = model_cfg.get_api_key()
+
+        # 从子状态取已完成子步骤摘要
+        completed = [r for r in sub_state.step_results if r.verified]
+        completed_sub_summary = "; ".join(
+            f"{r.step_id}: {r.output[:150]}" for r in completed
+        ) or "无"
+
+        # 剩余未执行子步骤（从失败步骤起）
+        remaining: list[str] = []
+        found = False
+        for step in (sub_state.plan.steps if sub_state.plan else []):
+            if step.id == failed_sub_step.id:
+                found = True
+            if found:
+                remaining.append(step.intent)
+
+        prompt = self._get_sub_replan_prompt().format(
+            parent_step_intent=parent_step.intent,
+            failed_sub_step_intent=failed_sub_step.intent,
+            reason=result_output[:500],
+            completed_sub_summary=completed_sub_summary,
+            remaining_sub_steps=json.dumps(remaining, ensure_ascii=False),
+            parent_step_id=parent_step.id,
+        )
+
+        raw = await LLMClient.call_text(
+            model_cfg, api_key, prompt, max_tokens=4096, temperature=0.3
+        )
+        plan_text = strip_code_fence(raw)
+        if not plan_text:
+            logger.warning("sub_replan LLM 响应为空，返回空步骤列表")
+            return []
+        try:
+            data = json.loads(plan_text)
+        except json.JSONDecodeError as e:
+            logger.warning("sub_replan 响应解析失败（%s），原文：%s", e, plan_text[:200])
             return []
         return [Step(**s) for s in data.get("steps", [])]
 

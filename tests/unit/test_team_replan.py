@@ -65,7 +65,7 @@ async def test_team_inner_replan_success(tmp_path):
     mock_planner.think_and_plan = AsyncMock(
         return_value=Plan(goal="完成某个任务", steps=[sub1, sub2_orig])
     )
-    mock_planner.replan = AsyncMock(return_value=[sub2_new])
+    mock_planner.sub_replan = AsyncMock(return_value=[sub2_new])
 
     # Executor：sub1 通过，sub2_orig 失败，sub2_new 通过
     async def mock_executor_run(step, state):
@@ -95,7 +95,7 @@ async def test_team_inner_replan_success(tmp_path):
     assert result.passed is True
     assert result.step_id == "s1"
     # replan 被调用一次（sub2_orig 失败时）
-    mock_planner.replan.assert_awaited_once()
+    mock_planner.sub_replan.assert_awaited_once()
     # 执行了 sub1, sub2_orig(失败), sub2_new(通过)
     executed_ids = [r.step_id for r in result.sub_steps]
     assert "sub1" in executed_ids
@@ -105,71 +105,27 @@ async def test_team_inner_replan_success(tmp_path):
 
 @pytest.mark.asyncio
 async def test_team_inner_replan_exhausted(tmp_path):
-    """子步骤失败次数超出 max_sub_replans=1 → 上报失败，不再重规划"""
+    """P2：同一 step id 重规划次数超出 max_sub_replans=1 → 不再重规划，上报失败。
+
+    重规划返回的新步骤复用相同的 id="sub2"，计数器再次命中同一 key，
+    第二次到达 sub2 时 count=1 已达上限，直接停止。
+    """
     from sunday.agent.team import Team
 
     cfg = _make_config(tmp_path, max_sub_replans=1)
     parent_step = _make_step("s1")
     parent_state = _make_state()
 
-    sub1 = _make_step("sub1")          # 通过
-    sub2 = _make_step("sub2")          # 失败
-    sub2_r = _make_step("sub2_retry")  # 重规划后仍失败
+    sub2 = _make_step("sub2")
+    # replan 返回相同 id 的新步骤（模拟换了执行方式但保留同一步骤语义）
+    sub2_again = _make_step("sub2")
 
     mock_planner = MagicMock()
     mock_planner.config = cfg
     mock_planner.think_and_plan = AsyncMock(
-        return_value=Plan(goal="g", steps=[sub1, sub2])
+        return_value=Plan(goal="g", steps=[sub2])
     )
-    mock_planner.replan = AsyncMock(return_value=[sub2_r])
-
-    async def mock_executor_run(step, state):
-        if step.id == "sub1":
-            return _passed_result(step.id)
-        return _failed_result(step.id)  # sub2 和 sub2_retry 都失败
-
-    async def mock_verifier_check(step, result, state):
-        return VerifyResult(passed=result.verified, reason="mock",
-                            should_replan=not result.verified)
-
-    mock_executor = MagicMock()
-    mock_executor.run = mock_executor_run
-    mock_verifier = MagicMock()
-    mock_verifier.check = mock_verifier_check
-
-    team = Team.__new__(Team)
-    team.planner = mock_planner
-    team.executor = mock_executor
-    team.verifier = mock_verifier
-    team.emit = _mock_emit
-
-    result = await team.run(parent_step, parent_state)
-
-    assert result.passed is False
-    # replan 调用一次（sub2 失败时），但 sub2_retry 也失败，预算耗尽不再重规划
-    mock_planner.replan.assert_awaited_once()
-    executed_ids = [r.step_id for r in result.sub_steps]
-    assert "sub2" in executed_ids
-    assert "sub2_retry" in executed_ids
-
-
-@pytest.mark.asyncio
-async def test_team_inner_replan_returns_empty(tmp_path):
-    """replan 返回空列表 → 立即停止，不挂起"""
-    from sunday.agent.team import Team
-
-    cfg = _make_config(tmp_path, max_sub_replans=1)
-    parent_step = _make_step("s1")
-    parent_state = _make_state()
-
-    sub1 = _make_step("sub1")
-
-    mock_planner = MagicMock()
-    mock_planner.config = cfg
-    mock_planner.think_and_plan = AsyncMock(
-        return_value=Plan(goal="g", steps=[sub1])
-    )
-    mock_planner.replan = AsyncMock(return_value=[])  # 空列表
+    mock_planner.sub_replan = AsyncMock(return_value=[sub2_again])
 
     async def mock_executor_run(step, state):
         return _failed_result(step.id)
@@ -191,7 +147,52 @@ async def test_team_inner_replan_returns_empty(tmp_path):
     result = await team.run(parent_step, parent_state)
 
     assert result.passed is False
-    mock_planner.replan.assert_awaited_once()
+    # sub2 失败 → replan 1 次（count=1）→ sub2_again(id="sub2") 失败 → count 已达 1，不再 replan
+    mock_planner.sub_replan.assert_awaited_once()
+    executed_ids = [r.step_id for r in result.sub_steps]
+    # 两次执行 sub2（原始 + 重规划后的）
+    assert executed_ids.count("sub2") == 2
+
+
+@pytest.mark.asyncio
+async def test_team_inner_replan_returns_empty(tmp_path):
+    """replan 返回空列表 → 立即停止，不挂起"""
+    from sunday.agent.team import Team
+
+    cfg = _make_config(tmp_path, max_sub_replans=1)
+    parent_step = _make_step("s1")
+    parent_state = _make_state()
+
+    sub1 = _make_step("sub1")
+
+    mock_planner = MagicMock()
+    mock_planner.config = cfg
+    mock_planner.think_and_plan = AsyncMock(
+        return_value=Plan(goal="g", steps=[sub1])
+    )
+    mock_planner.sub_replan = AsyncMock(return_value=[])  # 空列表
+
+    async def mock_executor_run(step, state):
+        return _failed_result(step.id)
+
+    async def mock_verifier_check(step, result, state):
+        return VerifyResult(passed=False, reason="mock", should_replan=True)
+
+    mock_executor = MagicMock()
+    mock_executor.run = mock_executor_run
+    mock_verifier = MagicMock()
+    mock_verifier.check = mock_verifier_check
+
+    team = Team.__new__(Team)
+    team.planner = mock_planner
+    team.executor = mock_executor
+    team.verifier = mock_verifier
+    team.emit = _mock_emit
+
+    result = await team.run(parent_step, parent_state)
+
+    assert result.passed is False
+    mock_planner.sub_replan.assert_awaited_once()
     # 只执行了 sub1，没有额外的步骤
     assert len(result.sub_steps) == 1
     assert result.sub_steps[0].step_id == "sub1"

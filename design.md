@@ -319,7 +319,8 @@ AgentState                      ← 一次任务执行的完整状态，贯穿�
 ├── task: str                   ← 用户原始输入
 ├── history: list[Message]      ← 本会话历史对话（用于多轮上下文）
 ├── plan: Plan | None
-├── step_results: list[StepResult]
+├── step_results: list[StepResult]   ← Team 内子步骤结果（子状态用）
+├── team_results: list[TeamResult]   ← 顶层 Step 执行结果（外层循环用）
 ├── thinking_level: ThinkingLevel
 └── aborted: bool
 
@@ -328,8 +329,8 @@ Plan                            ← Planner 输出，描述"做什么"
 ├── thinking: str | None        ← THINK 阶段的思考内容（可选展示）
 └── steps: list[Step]
 
-Step                            ← 一个原子执行单元
-├── id: str                     ← "step_1", "step_2"...
+Step                            ← 一个执行单元（顶层 Step 或 Team 内子步骤）
+├── id: str                     ← 顶层 "step_1"；子步骤 "step_1.1"；重规划 "step_1.R1"
 ├── intent: str                 ← 这步要达成什么
 ├── expected_input: str
 ├── expected_output: str
@@ -337,13 +338,20 @@ Step                            ← 一个原子执行单元
 ├── depends_on: list[str]       ← 依赖的 step id
 └── status: StepStatus          ← PENDING|RUNNING|DONE|FAILED|SKIPPED
 
-StepResult                      ← Executor 的输出
+StepResult                      ← Executor 对单个子步骤的输出
 ├── step_id: str
 ├── status: StepStatus
 ├── output: str
 ├── react_iterations: list[ReactIteration]
 ├── verified: bool              ← Verifier 填写
 └── verify_reason: str          ← Verifier 填写
+
+TeamResult                      ← Team 对单个顶层 Step 的执行结果
+├── step_id: str
+├── passed: bool
+├── output: str                 ← 各子步骤 output 拼接（含 ✓/✗ 标注）
+├── should_replan: bool         ← 外层重规划参考：False 表示换方案也无意义
+└── sub_steps: list[StepResult] ← 内部各子步骤的详细结果
 
 ReactIteration                  ← ReAct 单次循环记录
 ├── thought: str
@@ -353,7 +361,21 @@ ReactIteration                  ← ReAct 单次循环记录
 └── iteration: int
 ```
 
-### 4.2 Agent Loop 主控制流
+### 4.2 两层执行架构
+
+系统采用两层 Team 架构：**外层 AgentLoop 负责编排**，**内层 Team 负责执行**。
+
+```
+外层（AgentLoop）                    内层（Team，每个顶层 Step 独立一个）
+─────────────────────────────────   ────────────────────────────────────────
+THINK → PLAN（顶层步骤分解）         SUB-PLAN（1~3 个子步骤）
+→ 按顺序驱动各 Team                 → EXECUTE（ReAct 工具调用）
+→ EVALUATE（汇总评估）              → VERIFY（逐子步验证）
+→ 记忆更新                         → 内层重规划（sub_replan，子步骤级别）
+外层重规划（replan，顶层步骤级别）
+```
+
+### 4.3 AgentLoop 主控制流
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -362,48 +384,66 @@ ReactIteration                  ← ReAct 单次循环记录
 │  emit(STATUS="thinking")                                    │
 │       │                                                     │
 │       ▼                                                     │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  PLANNER.think_and_plan(state)                      │   │
-│  │  ① 加载 L0 上下文（ContextBuilder.build）            │   │
-│  │  ② 扩展思考（按 thinking_level 分配 token budget）   │   │
-│  │  ③ 结构化输出 Plan（LLM structured output）          │   │
-│  │  ④ 写入 JSONL（type=plan）                          │   │
-│  └──────────────────────┬──────────────────────────────┘   │
-│                         │ plan.steps                        │
-│                         ▼                                   │
-│  ┌─── for step in steps（串行，依赖满足才执行）────────────┐  │
-│  │                                                     │  │
-│  │    emit(STATUS=f"executing:{step.id}")              │  │
-│  │         │                                           │  │
-│  │         ▼                                           │  │
-│  │    ┌─────────────────────────────────────────────┐ │  │
-│  │    │  EXECUTOR.run(step, state)                  │ │  │
-│  │    │  ReAct 循环（最多 max_steps 次）              │ │  │
-│  │    │  Thought → ToolCall → Observation → ...     │ │  │
-│  │    └──────────────────┬──────────────────────────┘ │  │
-│  │                       │ StepResult                  │  │
-│  │                       ▼                             │  │
-│  │    ┌─────────────────────────────────────────────┐ │  │
-│  │    │  VERIFIER.check(step, result)               │ │  │
-│  │    │  对照 success_criteria 判断是否通过           │ │  │
-│  │    └────────────┬──────────────┬─────────────────┘ │  │
-│  │                 │ 通过          │ 失败               │  │
-│  │                 ▼              ▼                    │  │
-│  │            继续下一步      should_replan?            │  │
-│  │                            ├─ 是 → Planner.replan  │  │
-│  │                            │      替换剩余步骤       │  │
-│  │                            └─ 否 → 标记失败，继续    │  │
-│  │    写入 JSONL（type=step_result）                    │  │
-│  └─────────────────────────────────────────────────────┘  │
-│                         │                                   │
-│                         ▼                                   │
-│  MEMORY.consolidate_session(state)  ← 后台异步，不阻塞返回  │
-│  emit(STATUS="idle")                                        │
-│  return VERIFIER.summarize(state)                           │
+│  PLANNER.think_and_plan(state)  → Plan（顶层 steps）        │
+│       │                                                     │
+│       ▼                                                     │
+│  ┌─── while idx < len(steps)（依赖满足才执行）──────────────┐ │
+│  │                                                     │ │
+│  │    Team(config, registry).run(step, state)         │ │
+│  │         │                                           │ │
+│  │         ▼  TeamResult                               │ │
+│  │    passed?                                          │ │
+│  │    ├─ 是 → idx++，继续                              │ │
+│  │    └─ 否 → should_replan & 未超限?                  │ │
+│  │              ├─ 是 → Planner.replan() 替换 steps[idx:] │ │
+│  │              └─ 否 → 跳过重规划，idx++，继续         │ │
+│  └─────────────────────────────────────────────────────┘ │
+│       │                                                     │
+│       ▼                                                     │
+│  VERIFIER.evaluate(state, team_results) → 整体摘要          │
+│  MEMORY.consolidate_session(state)                          │
+│  return summary                                             │
 └─────────────────────────────────────────────────────────────┘
+
+重规划双重限制（configs/agent.yaml reasoning 节）：
+  max_replans_per_step: 3   ← 每个顶层 Step 最多触发 N 次外层重规划
+  max_replans_total:   10   ← 整个任务全局兜底上限
 ```
 
-### 4.3 ReAct 执行循环（Executor）
+### 4.4 Team 内层执行流
+
+每个顶层 Step 进入独立的 Team，Team 内部完成完整的 plan/execute/verify/replan 闭环：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Team.run(step, state)                   │
+│                                                             │
+│  PLANNER.think_and_plan(sub_task)  → 1~3 个子步骤           │
+│       │  （使用 team_plan.md prompt，子步骤 id: step.id.1）  │
+│       ▼                                                     │
+│  ┌─── while idx < len(sub_steps) ───────────────────────┐  │
+│  │                                                      │  │
+│  │    EXECUTOR.run(sub_step, sub_state)                 │  │
+│  │         │ StepResult                                 │  │
+│  │         ▼                                            │  │
+│  │    VERIFIER.check(sub_step, result)                  │  │
+│  │         │                                            │  │
+│  │    passed?                                           │  │
+│  │    ├─ 是 → idx++，继续                               │  │
+│  │    └─ 否 → should_replan & 未超限?                   │  │
+│  │              ├─ 是 → Planner.sub_replan()            │  │
+│  │              │       替换 sub_steps[idx:]             │  │
+│  │              └─ 否 → broke_on_failure=True, break    │  │
+│  └──────────────────────────────────────────────────────┘  │
+│       │                                                     │
+│  return TeamResult(passed=not broke_on_failure, ...)        │
+└─────────────────────────────────────────────────────────────┘
+
+内层重规划限制：
+  max_sub_replans: 3  ← 每个子步骤 id 独立计数，各自最多触发 N 次
+```
+
+### 4.5 ReAct 执行循环（Executor）
 
 ```
 Executor.run(step, state):
@@ -424,26 +464,42 @@ Executor.run(step, state):
 
     observation = registry.execute(tool_call)    ← 含超时、确认、Guard
 
-    messages += [assistant(tool_call), tool(observation)]
+    messages += [assistant(tool_call, content=""), tool(observation)]
     last_action = tool_call
 
-  raise MaxStepsError  ← 超出迭代上限
+  # 达到 max_steps：强制收尾，禁用工具输出最终结果（不抛异常）
+  return StepResult(DONE, force_final_output)
 ```
 
-### 4.4 Planner 局部重规划
+### 4.6 两层重规划
 
-当 Verifier 判定失败且 `should_replan=True` 时，触发局部重规划：
+#### 外层重规划（顶层步骤级别）
+
+Verifier 判定 TeamResult.passed=False 且 `should_replan=True` 时触发：
 
 ```
-Planner.replan(failed_step, result, state):
-  输入：失败步骤、失败原因、已有执行结果
-  输出：替代 failed_step 之后所有未执行步骤的新步骤列表
+Planner.replan(failed_step, result_output, state):
+  prompt:  replan.md（含任务目标、失败原因、已完成顶层步骤摘要、剩余步骤列表）
+  输出：替代 failed_step 及之后所有未执行顶层步骤的新步骤列表
   约束：不调用任何外部工具；temperature=0.3
 ```
 
-重规划后替换 `state.plan.steps` 中剩余未执行的步骤，继续循环。
+#### 内层重规划（Team 子步骤级别）
 
-### 4.5 emit 注入机制
+Verifier 判定子步骤失败且 `should_replan=True` 时由 Team 触发：
+
+```
+Planner.sub_replan(parent_step, failed_sub_step, result_output, sub_state):
+  prompt:  sub_replan.md（含父步骤意图、失败原因、已完成子步骤摘要、剩余子步骤列表）
+  输出：替代 failed_sub_step 及之后未执行子步骤的新子步骤列表
+  约束：不调用任何外部工具；temperature=0.3
+```
+
+两层重规划使用完全独立的 prompt 模板，上下文来源不同：
+- 外层：`state.team_results`（顶层结果）；prompt: `configs/prompts/replan.md`
+- 内层：`sub_state.step_results`（子步骤结果）；prompt: `configs/prompts/sub_replan.md`
+
+### 4.7 emit 注入机制
 
 `AgentLoop` 不直接依赖 `gateway`，通过构造时注入 `emit` 回调解耦：
 
