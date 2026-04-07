@@ -63,8 +63,15 @@ class Team:
         sub_state.plan = sub_plan
         logger.debug("Team %s 子规划完成，共 %d 个子步骤", step.id, len(sub_plan.steps))
 
-        # 串行执行子步骤
-        for sub_step in sub_plan.steps:
+        # 串行执行子步骤（支持内层重规划）
+        max_sub_replans = self.planner.config.reasoning.max_sub_replans
+        sub_steps = list(sub_plan.steps)
+        idx = 0
+        sub_replan_count = 0
+        broke_on_failure = False
+
+        while idx < len(sub_steps):
+            sub_step = sub_steps[idx]
             await self.emit(session_id, "status", {"status": f"team:{step.id}:{sub_step.id}"})
             sub_step.status = StepStatus.RUNNING
 
@@ -84,11 +91,31 @@ class Team:
             sub_step.status = StepStatus.DONE if verify.passed else StepStatus.FAILED
             sub_state.step_results.append(result)
 
-            if not verify.passed:
-                logger.info("Team %s 子步骤 %s 验证失败，停止执行", step.id, sub_step.id)
-                break
+            if verify.passed:
+                idx += 1
+                continue
 
-        all_passed = all(r.verified for r in sub_state.step_results)
+            # 子步骤失败：尝试内层重规划
+            if sub_replan_count < max_sub_replans:
+                sub_replan_count += 1
+                logger.info(
+                    "Team %s 子步骤 %s 失败，触发子任务重规划（%d/%d）",
+                    step.id, sub_step.id, sub_replan_count, max_sub_replans,
+                )
+                try:
+                    new_sub_steps = await self.planner.replan(sub_step, result.output, sub_state)
+                except Exception as e:
+                    logger.warning("Team %s 子任务重规划失败：%s", step.id, e)
+                    new_sub_steps = []
+                if new_sub_steps:
+                    sub_steps = sub_steps[:idx] + new_sub_steps
+                    continue  # idx 不变，从新子步骤 sub_steps[idx] 开始
+
+            logger.info("Team %s 子步骤 %s 验证失败，停止执行", step.id, sub_step.id)
+            broke_on_failure = True
+            break
+
+        all_passed = not broke_on_failure
         output = "\n".join(r.output for r in sub_state.step_results if r.output)
         return TeamResult(
             step_id=step.id,

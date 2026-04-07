@@ -71,8 +71,9 @@ class ReasoningConfig(BaseModel):
     """推理与思考配置"""
 
     max_steps: int = 15
-    max_replans_per_step: int = 2   # 每个步骤最多重规划次数
+    max_replans_per_step: int = 3   # 每个步骤最多重规划次数
     max_replans_total: int = 10     # 整个任务重规划总上限（防护兜底）
+    max_sub_replans: int = 3        # Team 内每个子任务最多重规划次数
     thinking_level: str = "medium"  # off | minimal | low | medium | high
     thinking_budget_tokens: int = 4096
 

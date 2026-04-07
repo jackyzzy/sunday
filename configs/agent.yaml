@@ -54,8 +54,9 @@ model:
 
 reasoning:
   max_steps: 20
-  max_replans_per_step: 2   # 每个步骤最多重规划次数
+  max_replans_per_step: 3   # 每个步骤最多重规划次数
   max_replans_total: 10     # 整个任务重规划总上限（防护兜底）
+  max_sub_replans: 3        # Team 内每个子任务最多重规划次数
   thinking_level: medium  # off | minimal | low | medium | high
   thinking_budget_tokens: 4096
 
