@@ -182,14 +182,14 @@ def test_memory_show_file_exists(runner, tmp_path):
     }))
 
     # cli.py 使用 `from sunday.config import settings`，patch 模块级单例
+    # 注意：Settings.sunday 是 cached_property，需在 SUNDAY_CONFIGS_DIR 仍在 env 时计算
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "fake-key",
         "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         fake_settings = Settings()
-
-    with patch("sunday.config.settings", fake_settings):
-        result = runner.invoke(main, ["memory", "show", "SOUL"])
+        with patch("sunday.config.settings", fake_settings):
+            result = runner.invoke(main, ["memory", "show", "SOUL"])
     assert result.exit_code == 0
     assert "Sunday" in result.output
 
@@ -239,9 +239,8 @@ def test_memory_search_found(runner, tmp_path):
         "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         fake_settings = Settings()
-
-    with patch("sunday.config.settings", fake_settings):
-        result = runner.invoke(main, ["memory", "search", "Python"])
+        with patch("sunday.config.settings", fake_settings):
+            result = runner.invoke(main, ["memory", "search", "Python"])
     assert result.exit_code == 0
     assert "Python" in result.output
 
@@ -266,8 +265,7 @@ def test_memory_search_not_found(runner, tmp_path):
         "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
         fake_settings = Settings()
-
-    with patch("sunday.config.settings", fake_settings):
-        result = runner.invoke(main, ["memory", "search", "不存在的词汇xyz"])
+        with patch("sunday.config.settings", fake_settings):
+            result = runner.invoke(main, ["memory", "search", "不存在的词汇xyz"])
     assert result.exit_code == 0
     assert "未找到" in result.output or "not found" in result.output.lower()
