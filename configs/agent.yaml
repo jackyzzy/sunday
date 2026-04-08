@@ -54,9 +54,9 @@ model:
 
 reasoning:
   max_steps: 10               # 任务顶层步骤数上限（超出则截断）
-  max_react_iteration: 5     # 单个子步骤内 ReAct 工具调用轮次上限
-  max_replans_per_step: 3     # Team 内层每个子步骤最多重规划次数
-  max_replans: 5             # 整个任务外层重规划总次数兜底上限
+  max_react_iteration: 10     # 单个子步骤内 ReAct 工具调用轮次上限
+  max_replans_per_step: 5     # Team 内层每个子步骤最多重规划次数
+  max_replans: 10             # 整个任务外层重规划总次数兜底上限
   thinking_level: medium  # off | minimal | low | medium | high
   thinking_budget_tokens: 4096
 
@@ -79,6 +79,16 @@ mcp:
 
 skills:
   extra_dirs: []
+
+# nodes:                         # 可选：为特定 step 定义专属节点配置（以 step.id 为 key）
+#   search_web:                  # 匹配 step.id == "search_web" 的步骤
+#     type: team                 # auto（默认，由 step.is_simple 决定）| team | simple
+#     extra_skills:              # 在基础工具集上叠加的技能包名（对应 skills/ 目录下子目录名）
+#       - web_search
+#   write_report:
+#     type: simple
+#     extra_skills:
+#       - files
 
 tasks:
   daily_brief:

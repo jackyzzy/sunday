@@ -118,6 +118,19 @@ class SkillsConfig(BaseModel):
     extra_dirs: list[str] = Field(default_factory=list)
 
 
+class NodeConfig(BaseModel):
+    """单个执行节点的专属配置（可选，未配置则使用全局默认）。
+
+    在 agent.yaml 的 nodes 节中以 step.id 为 key 配置，ReactAgent 创建 Team/SimpleNode
+    时优先读取此配置；未配置则根据 step.is_simple 选择默认节点类型。
+    """
+
+    type: str = "auto"  # auto | team | simple；auto 时由 step.is_simple 决定
+    extra_skills: list[str] = Field(default_factory=list)  # 在基础工具集上叠加的技能名
+    # TODO(phase-future): 支持单个节点使用独立模型配置，覆盖全局 model 节
+    model: "ModelConfig | None" = None
+
+
 class AgentConfig(BaseModel):
     """Agent 运行配置"""
 
@@ -153,6 +166,7 @@ class SundayConfig(BaseModel):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     tasks: dict[str, TaskConfig] = Field(default_factory=dict)
+    nodes: dict[str, NodeConfig] = Field(default_factory=dict)  # step.id → 节点专属配置
 
     def load_prompt(self, name: str) -> str:
         """从 configs/prompts/{name}.md 加载 prompt 模板。

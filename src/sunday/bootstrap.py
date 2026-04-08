@@ -1,13 +1,10 @@
-"""AgentLoop 和 ToolRegistry 统一构建工厂（CLI 和 Gateway 共用）。
-
-消除 cli.py 与 gateway/server.py 中重复的构建逻辑。
-"""
+"""AgentLoop 和 ToolRegistry 统一构建工厂（CLI 和 Gateway 共用）。"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sunday.agent.loop import AgentLoop
+    from sunday.agent.react_agent import ReactAgent
     from sunday.agent.utils import EmitCallable
     from sunday.config import SundayConfig
     from sunday.tools.registry import ConfirmationHandler, ToolRegistry
@@ -43,40 +40,17 @@ def build_agent_loop(
     emit: "EmitCallable",
     mode: str = "gateway",
     confirmation_handler: "ConfirmationHandler | None" = None,
-) -> "AgentLoop":
-    """构建完整 AgentLoop，注入所有依赖。
+) -> "ReactAgent":
+    """构建 ReactAgent（原 AgentLoop）。
 
-    mode: "cli" 或 "gateway"，写入 session_log。
+    现在只需传 config，ReactAgent.__init__ 内部自动组装所有依赖。
+    函数签名保持不变，CLI 和 Gateway 调用方无需修改。
     """
-    from sunday.agent.executor import Executor
-    from sunday.agent.loop import AgentLoop
-    from sunday.agent.planner import Planner
-    from sunday.agent.verifier import Verifier
-    from sunday.memory.context import ContextBuilder
-    from sunday.memory.manager import MemoryManager
-    from sunday.skills.loader import SkillLoader
+    from sunday.agent.react_agent import ReactAgent
 
-    workspace_dir = cfg.agent.workspace_dir
-    project_skills_dir = workspace_dir.parent.parent / "skills"
-
-    registry = build_tool_registry(cfg, confirmation_handler=confirmation_handler)
-
-    skill_loader = SkillLoader(
-        project_skills_dir=project_skills_dir,
-        user_skills_dir=workspace_dir / "skills",
-    )
-    skill_loader.discover()
-
-    context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader, config=cfg)
-    memory_manager = MemoryManager(workspace_dir, config=cfg)
-
-    return AgentLoop(
-        planner=Planner(cfg),
-        executor=Executor(cfg, tool_registry=registry),
-        verifier=Verifier(cfg),
-        emit=emit,
-        context_builder=context_builder,
-        memory_manager=memory_manager,
+    return ReactAgent(
         config=cfg,
+        emit=emit,
         mode=mode,
+        confirmation_handler=confirmation_handler,
     )

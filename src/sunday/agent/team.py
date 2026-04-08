@@ -67,10 +67,10 @@ class Team:
         max_sub_replans = self.planner.config.reasoning.max_replans_per_step
         sub_steps = list(sub_plan.steps)
         idx = 0
-        # P2：每个子步骤独立计数，互不影响
+        # 每个子步骤独立计数，互不影响（避免单个子步骤无限重规划）
         sub_replan_counts: dict[str, int] = {}
         broke_on_failure = False
-        last_verify_should_replan = True  # P1：记录最后失败步骤的 should_replan
+        last_verify_should_replan = True  # 记录最后失败步骤的 should_replan，供外层决策
 
         while idx < len(sub_steps):
             sub_step = sub_steps[idx]
@@ -106,7 +106,7 @@ class Team:
                     step.id, sub_step.id, step_replan_count + 1, max_sub_replans,
                 )
                 try:
-                    # P0：使用专用的 sub_replan()，而非外层的 replan()
+                    # 使用专用的 sub_replan()，而非外层的 replan()，避免影响顶层计划
                     new_sub_steps = await self.planner.sub_replan(
                         step, sub_step, result.output, sub_state
                     )
@@ -123,7 +123,7 @@ class Team:
             break
 
         all_passed = not broke_on_failure
-        # P4：失败子步骤加 ✗ 标注，帮助外层 replan 准确定位失败原因
+        # 失败子步骤加 ✗ 标注，帮助外层 replan 准确定位失败原因
         parts = []
         for r in sub_state.step_results:
             tag = "✓" if r.verified else "✗(失败)"

@@ -55,6 +55,22 @@ class ToolRegistry:
         self._tools: dict[str, tuple[ToolMeta, Callable]] = {}
         self._report_dir: "Path | None" = None
 
+    def clone(self) -> "ToolRegistry":
+        """返回当前注册表的独立副本（工具函数引用共享，_tools 字典独立）。
+
+        用于 ReactAgent._create_node()：每个 Team/SimpleNode 获得自己的副本，
+        可在基础工具集之上按需叠加专属工具，而不影响其他节点或基础注册表。
+        """
+        new = ToolRegistry.__new__(ToolRegistry)
+        new._tools = dict(self._tools)  # 浅拷贝，函数引用共享
+        new._allow_list = self._allow_list
+        new._deny_list = self._deny_list
+        new._default_timeout = self._default_timeout
+        new._guard = self._guard
+        new._confirmation_handler = self._confirmation_handler
+        new._report_dir = self._report_dir
+        return new
+
     def set_report_dir(self, d: "Path") -> None:
         """由 AgentLoop.run() 在每次任务开始时调用，路由 write_file 输出至 session 目录。"""
         self._report_dir = d

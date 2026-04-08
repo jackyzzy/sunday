@@ -148,8 +148,8 @@ async def test_simple_step_routes_to_simple_node(tmp_path):
     """is_simple=True 的步骤路由到 SimpleNode，不创建 Team。"""
     from unittest.mock import patch as upatch
 
-    from sunday.agent.loop import AgentLoop
     from sunday.agent.models import Plan
+    from sunday.agent.react_agent import ReactAgent
 
     cfg = _make_config(tmp_path)
     simple_step = _step("s1", is_simple=True)
@@ -168,18 +168,18 @@ async def test_simple_step_routes_to_simple_node(tmp_path):
     mock_verifier = MagicMock()
     mock_verifier.evaluate = AsyncMock(return_value="完成")
 
-    mock_executor = MagicMock()
-    mock_executor.tool_registry = MagicMock()
+    mock_tool_registry = MagicMock()
+    mock_tool_registry.clone = MagicMock(return_value=MagicMock())
 
-    loop = AgentLoop.__new__(AgentLoop)
-    loop.config = cfg
-    loop.executor = mock_executor
-    loop.verifier = mock_verifier
-    loop.emit = _noop_emit
+    agent = ReactAgent.__new__(ReactAgent)
+    agent.config = cfg
+    agent.tool_registry = mock_tool_registry
+    agent.verifier = mock_verifier
+    agent.emit = _noop_emit
 
-    with upatch("sunday.agent.loop.SimpleNode", return_value=mock_simple_node) as mock_sn_cls, \
-         upatch("sunday.agent.loop.Team", return_value=mock_team) as mock_team_cls:
-        await loop._execute_steps(state, _noop_emit, MagicMock())
+    with upatch("sunday.agent.react_agent.SimpleNode", return_value=mock_simple_node) as mock_sn_cls, \
+         upatch("sunday.agent.react_agent.Team", return_value=mock_team) as mock_team_cls:
+        await agent.execute(state, _noop_emit, MagicMock())
 
     # SimpleNode 被实例化，Team 未被实例化
     mock_sn_cls.assert_called_once()
@@ -192,7 +192,7 @@ async def test_complex_step_routes_to_team(tmp_path):
     """is_simple=False 的步骤路由到 Team，不创建 SimpleNode。"""
     from unittest.mock import patch as upatch
 
-    from sunday.agent.loop import AgentLoop
+    from sunday.agent.react_agent import ReactAgent
 
     cfg = _make_config(tmp_path)
     complex_step = _step("s1", is_simple=False)
@@ -208,18 +208,18 @@ async def test_complex_step_routes_to_team(tmp_path):
     mock_verifier = MagicMock()
     mock_verifier.evaluate = AsyncMock(return_value="完成")
 
-    mock_executor = MagicMock()
-    mock_executor.tool_registry = MagicMock()
+    mock_tool_registry = MagicMock()
+    mock_tool_registry.clone = MagicMock(return_value=MagicMock())
 
-    loop = AgentLoop.__new__(AgentLoop)
-    loop.config = cfg
-    loop.executor = mock_executor
-    loop.verifier = mock_verifier
-    loop.emit = _noop_emit
+    agent = ReactAgent.__new__(ReactAgent)
+    agent.config = cfg
+    agent.tool_registry = mock_tool_registry
+    agent.verifier = mock_verifier
+    agent.emit = _noop_emit
 
-    with upatch("sunday.agent.loop.SimpleNode", return_value=mock_simple_node) as mock_sn_cls, \
-         upatch("sunday.agent.loop.Team", return_value=mock_team) as mock_team_cls:
-        await loop._execute_steps(state, _noop_emit, MagicMock())
+    with upatch("sunday.agent.react_agent.SimpleNode", return_value=mock_simple_node) as mock_sn_cls, \
+         upatch("sunday.agent.react_agent.Team", return_value=mock_team) as mock_team_cls:
+        await agent.execute(state, _noop_emit, MagicMock())
 
     # Team 被实例化，SimpleNode 未被实例化
     mock_team_cls.assert_called_once()

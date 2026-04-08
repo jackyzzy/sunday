@@ -1,10 +1,23 @@
 """simple.py — 两个轻量执行组件：
-- SimpleAgent：Phase 1 遗留，直接 LLM 调用（CLI --model-override 快速路径使用）
-- SimpleNode：两层架构中的简单步骤执行节点，接口与 Team 一致
+
+- SimpleAgent：Phase 1 遗留，直接 LLM 调用（CLI --model-override 快速路径使用）。
+  TODO(refactor): 未来可迁移为接收 SundayConfig 而非 Settings，与 ReactAgent 风格统一。
+  目前保留原有接口，避免破坏 CLI 调用链。
+
+- SimpleNode：两层架构中的简单步骤执行节点，接口与 Team 一致。
+  由 ReactAgent._create_node() 创建，接收 clone 后的 ToolRegistry。
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sunday.config import Settings
+
+if TYPE_CHECKING:
+    from sunday.agent.executor import ToolRegistryProtocol
+    from sunday.agent.models import AgentState, Step, TeamResult
+    from sunday.agent.utils import EmitCallable
+    from sunday.config import SundayConfig
 
 
 class SimpleAgent:
@@ -126,10 +139,15 @@ class SimpleNode:
     """执行单个简单 Step 的轻量节点（无子规划，单次 ReAct + 验证）。
 
     接口与 Team 一致：run(step, parent_state) → TeamResult。
-    tool_registry 由顶层传入，与 Team 共享同一注册表。
+    tool_registry 由 ReactAgent._create_node() 传入（基础注册表的 clone）。
     """
 
-    def __init__(self, config, tool_registry, emit=None) -> None:
+    def __init__(
+        self,
+        config: "SundayConfig",
+        tool_registry: "ToolRegistryProtocol",
+        emit: "EmitCallable | None" = None,
+    ) -> None:
         from sunday.agent.executor import Executor
         from sunday.agent.utils import noop_emit
         from sunday.agent.verifier import Verifier
@@ -138,7 +156,7 @@ class SimpleNode:
         self.verifier = Verifier(config)
         self.emit = emit or noop_emit
 
-    async def run(self, step, parent_state) -> "TeamResult":
+    async def run(self, step: "Step", parent_state: "AgentState") -> "TeamResult":
         from sunday.agent.executor import MaxStepsError, RepetitionError
         from sunday.agent.models import StepResult, StepStatus, TeamResult
 
