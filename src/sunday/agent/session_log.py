@@ -6,7 +6,8 @@
 每行一个 JSON 对象，字段固定：
     {"ts": "ISO8601", "session_id": "...", "event": "...", "data": {...}}
 
-事件类型：session_start / plan / step_start / step_result / replan / error / session_end
+事件类型：session_start / plan / step_start / sub_step_result /
+         step_result / replan / team_error / error / session_end
 """
 from __future__ import annotations
 
@@ -42,29 +43,57 @@ class SessionLog:
         """将 emit 事件翻译为语义化 log 事件并写入 JSONL。
 
         mapping:
-          status:executing:xxx → step_start
-          status:replanning    → replan
-          plan                 → plan
-          step_result          → step_result
+          status:executing:xxx → step_start  (含 intent, node_type)
+          status:replanning    → replan       (含 step_id, replan_count, failure_reason)
+          plan                 → plan         (含 step intent/criteria)
+          step_result          → step_result  (含 verify_reason, duration_ms)
+          sub_step_result      → sub_step_result
+          team_error           → team_error
           error                → error
           其余 status（thinking/summarizing/team:xxx 等）静默忽略
         """
         if event_type == "status":
             status_val = data.get("status", "")
             if status_val.startswith("executing:"):
-                self._write("step_start", {"step_id": status_val.split(":", 1)[1]})
+                self._write("step_start", {
+                    "step_id": status_val.split(":", 1)[1],
+                    "intent": data.get("intent", ""),
+                    "node_type": data.get("node_type", ""),
+                })
             elif status_val == "replanning":
-                self._write("replan", {})
+                self._write("replan", {
+                    "step_id": data.get("step_id", ""),
+                    "replan_count": data.get("replan_count"),
+                    "max_replans": data.get("max_replans"),
+                    "failure_reason": data.get("failure_reason", ""),
+                })
         elif event_type == "plan":
             self._write("plan", {
                 "goal": data.get("goal", ""),
-                "steps": [s["id"] for s in data.get("steps", [])],
+                "steps": data.get("steps", []),
             })
         elif event_type == "step_result":
             self._write("step_result", {
                 "step_id": data.get("step_id", ""),
                 "status": data.get("status", ""),
                 "verified": data.get("verified"),
+                "verify_reason": data.get("verify_reason", ""),
+                "duration_ms": data.get("duration_ms"),
+            })
+        elif event_type == "sub_step_result":
+            self._write("sub_step_result", {
+                "parent_step_id": data.get("parent_step_id", ""),
+                "sub_step_id": data.get("sub_step_id", ""),
+                "status": data.get("status", ""),
+                "verified": data.get("verified"),
+                "verify_reason": data.get("verify_reason", ""),
+            })
+        elif event_type == "team_error":
+            self._write("team_error", {
+                "step_id": data.get("step_id", ""),
+                "phase": data.get("phase", ""),
+                "sub_step_id": data.get("sub_step_id", ""),
+                "error": data.get("error", ""),
             })
         elif event_type == "error":
             self._write("error", {"message": data.get("message", "")})

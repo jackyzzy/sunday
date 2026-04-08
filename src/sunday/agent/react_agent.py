@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -131,7 +132,10 @@ class ReactAgent:
                 state.plan = plan
             await logged_emit(state.session_id, "plan", {
                 "goal": plan.goal,
-                "steps": [s.model_dump() for s in plan.steps],
+                "steps": [
+                    {"id": s.id, "intent": s.intent[:200], "criteria": s.success_criteria[:100]}
+                    for s in plan.steps
+                ],
             })
 
             # EXECUTE + VERIFY
@@ -184,16 +188,23 @@ class ReactAgent:
                     "step_id": step.id,
                     "status": StepStatus.SKIPPED.value,
                     "verified": None,
+                    "verify_reason": "",
+                    "duration_ms": 0,
                 })
                 idx += 1
                 continue
 
             step.status = StepStatus.RUNNING
-            await emit(state.session_id, "status", {"status": f"executing:{step.id}"})
+            step_start_ts = datetime.now(timezone.utc)
+            await emit(state.session_id, "status", {
+                "status": f"executing:{step.id}",
+                "intent": step.intent[:200],
+                "node_type": "simple" if step.is_simple else "team",
+            })
 
             replan_took_over = False
             while True:
-                node = self._create_node(step)
+                node = self._create_node(step, emit)
                 team_result = await node.run(step, state)
 
                 if team_result.passed:
@@ -211,7 +222,13 @@ class ReactAgent:
                         "步骤 %s 失败，触发局部重规划（全局第 %d/%d 次）",
                         step.id, total_replan_count, max_replans,
                     )
-                    await emit(state.session_id, "status", {"status": "replanning"})
+                    await emit(state.session_id, "status", {
+                        "status": "replanning",
+                        "step_id": step.id,
+                        "replan_count": total_replan_count,
+                        "max_replans": max_replans,
+                        "failure_reason": team_result.output[:300],
+                    })
                     new_steps = await self.replan(step, team_result, state)
                     if new_steps:
                         steps = steps[:idx] + new_steps
@@ -229,11 +246,24 @@ class ReactAgent:
             if replan_took_over:
                 continue
 
+            # 提取 verify_reason：优先取最后一个失败子步骤的原因
+            verify_reason = ""
+            if team_result.sub_steps:
+                failing = [s for s in team_result.sub_steps if not s.verified]
+                src = failing[-1] if failing else team_result.sub_steps[-1]
+                verify_reason = src.verify_reason or ""
+
+            duration_ms = round(
+                (datetime.now(timezone.utc) - step_start_ts).total_seconds() * 1000
+            )
+
             state.team_results.append(team_result)
             await emit(state.session_id, "step_result", {
                 "step_id": step.id,
                 "status": step.status.value,
                 "verified": team_result.passed,
+                "verify_reason": verify_reason,
+                "duration_ms": duration_ms,
             })
             idx += 1
 
@@ -290,11 +320,12 @@ class ReactAgent:
 
     # ── 节点工厂（配置驱动） ─────────────────────────────────────────────────
 
-    def _create_node(self, step: Step) -> Team | SimpleNode:
+    def _create_node(self, step: Step, emit: EmitCallable | None = None) -> Team | SimpleNode:
         """根据 step 和 agent.yaml nodes 配置创建对应的执行节点。
 
         优先读取 config.nodes[step.id] 的专属配置；未配置则根据 step.is_simple 决定。
         每个节点获得独立的 ToolRegistry clone，可在基础工具集上叠加专属技能工具。
+        emit 优先使用传入值（logged_emit），回退到 self.emit（raw）。
         """
         from sunday.tools.local_loader import load_skill_tools
 
@@ -322,9 +353,10 @@ class ReactAgent:
             or (node_type == "auto" and step.is_simple)
         )
 
+        _emit = emit or self.emit
         if use_simple:
-            return SimpleNode(self.config, registry, emit=self.emit)
-        return Team(self.config, registry, emit=self.emit)
+            return SimpleNode(self.config, registry, emit=_emit)
+        return Team(self.config, registry, emit=_emit)
 
     # ── 辅助方法 ────────────────────────────────────────────────────────────
 

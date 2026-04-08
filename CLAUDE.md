@@ -127,15 +127,36 @@ Shell 工具：`.sh` 文件头部加 YAML frontmatter 注释（`# ---` 包裹 na
 {"ts": "ISO8601", "session_id": "12位hex", "event": "...", "data": {...}}
 ```
 
-**事件类型：** `session_start` / `plan` / `step_start` / `step_result` / `replan` / `error` / `session_end`
+**事件类型：**
+
+| 事件 | 关键字段 | 说明 |
+|------|---------|------|
+| `session_start` | task, thinking_level, mode | 任务开始 |
+| `plan` | goal, steps[]{id,intent,criteria} | 顶层计划，每步含意图 |
+| `step_start` | step_id, intent, node_type | 步骤开始，含执行节点类型(team/simple) |
+| `sub_step_result` | parent_step_id, sub_step_id, verified, verify_reason | Team 内每个子步骤结果 |
+| `step_result` | step_id, status, verified, verify_reason, duration_ms | 顶层步骤完成 |
+| `replan` | step_id, replan_count, max_replans, failure_reason | 触发重规划，含原因 |
+| `team_error` | step_id, phase(sub_planning/sub_replanning), error | Team 内规划/重规划异常 |
+| `error` | message | 顶层未捕获异常 |
+| `session_end` | outcome, steps_total, steps_passed, duration_seconds | 任务结束 |
 
 **常用 jq 查询：**
 ```bash
 # 查看某 session 执行结果（最后一行即 session_end）
 tail -1 ~/.sunday/logs/<session_id>.jsonl | jq .
 
-# 查看所有未通过验证的步骤
-jq 'select(.event == "step_result" and .data.verified == false)' ~/.sunday/logs/<session_id>.jsonl
+# 查看所有失败步骤及 Verifier 判定原因
+jq 'select(.event == "step_result" and .data.verified == false) | {step: .data.step_id, reason: .data.verify_reason}' ~/.sunday/logs/<session_id>.jsonl
+
+# 查看重规划链（触发了哪些 step，第几次，失败原因）
+jq 'select(.event == "replan") | .data' ~/.sunday/logs/<session_id>.jsonl
+
+# 查看 Team 内部异常（子规划/子重规划失败原因）
+jq 'select(.event == "team_error") | .data' ~/.sunday/logs/<session_id>.jsonl
+
+# 查看子步骤粒度结果（定位 Team 内哪个子步骤失败）
+jq 'select(.event == "sub_step_result") | [.data.parent_step_id, .data.sub_step_id, .data.verified, .data.verify_reason]' ~/.sunday/logs/<session_id>.jsonl
 
 # 最近 10 个 session 健康概览（session_id / outcome / 耗时）
 for f in $(ls -t ~/.sunday/logs/*.jsonl | head -10); do
@@ -144,8 +165,8 @@ done
 ```
 
 **实现位置：**
-- `src/sunday/agent/session_log.py` — `SessionLog` 类
-- `src/sunday/agent/loop.py` — `run()` 内的 `_logged_emit` 包装（约 10 行）
+- `src/sunday/agent/session_log.py` — `SessionLog` 类（事件路由与写入）
+- `src/sunday/agent/react_agent.py` — `run()` 内的 `logged_emit` 包装；`_create_node()` 将 `logged_emit` 传入 Team/SimpleNode
 
 ---
 

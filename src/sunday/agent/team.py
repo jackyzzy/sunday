@@ -58,6 +58,12 @@ class Team:
             sub_plan = await self.planner.think_and_plan(sub_state, plan_prompt=team_plan_prompt)
         except Exception as e:
             logger.warning("Team %s 子规划失败：%s", step.id, e)
+            await self.emit(session_id, "team_error", {
+                "step_id": step.id,
+                "phase": "sub_planning",
+                "sub_step_id": "",
+                "error": str(e),
+            })
             return TeamResult(step_id=step.id, passed=False, output=f"子规划失败：{e}")
 
         sub_state.plan = sub_plan
@@ -92,6 +98,13 @@ class Team:
             result.verify_reason = verify.reason
             sub_step.status = StepStatus.DONE if verify.passed else StepStatus.FAILED
             sub_state.step_results.append(result)
+            await self.emit(session_id, "sub_step_result", {
+                "parent_step_id": step.id,
+                "sub_step_id": sub_step.id,
+                "status": sub_step.status.value,
+                "verified": verify.passed,
+                "verify_reason": verify.reason,
+            })
 
             if verify.passed:
                 idx += 1
@@ -112,6 +125,12 @@ class Team:
                     )
                 except Exception as e:
                     logger.warning("Team %s 子任务重规划失败：%s", step.id, e)
+                    await self.emit(session_id, "team_error", {
+                        "step_id": step.id,
+                        "phase": "sub_replanning",
+                        "sub_step_id": sub_step.id,
+                        "error": str(e),
+                    })
                     new_sub_steps = []
                 if new_sub_steps:
                     sub_steps = sub_steps[:idx] + new_sub_steps
