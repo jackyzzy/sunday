@@ -126,12 +126,18 @@ class Gateway:
 
         async def run_loop():
             try:
+                loop = None
                 if self._mock_loop_run is not None:
                     result = await self._mock_loop_run(state)
                 else:
                     loop = self._build_agent_loop(session_id, task=content)
                     result = await loop.run(state)
-                await self.emit(session_id, EventType.DONE, {"content": result or ""})
+                from sunday.tools.cli_tool import format_report_footer
+                footer = format_report_footer(
+                    result or "", getattr(loop, "session_report_dir", None)
+                )
+                display = (result or "") + footer
+                await self.emit(session_id, EventType.DONE, {"content": display})
             except asyncio.CancelledError:
                 await self.emit(session_id, EventType.STATUS, {"state": "aborted"})
                 raise

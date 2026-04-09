@@ -87,6 +87,7 @@ async def fetch_url(url: str, max_chars: int = 4096) -> str:
         return f"[错误] 抓取页面失败：{e}"
 
 
+from sunday.tools.probe import probe_tavily  # noqa: E402
 from sunday.tools.registry import ToolMeta  # noqa: E402
 
 TOOLS = [
@@ -102,6 +103,7 @@ TOOLS = [
             "required": ["query"],
         },
         timeout=30,
+        probe=probe_tavily,
     ), web_search),
     (ToolMeta(
         name="fetch_url",

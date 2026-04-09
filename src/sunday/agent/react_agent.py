@@ -65,6 +65,7 @@ class ReactAgent:
         self.config = config
         self.emit = emit or noop_emit
         self.mode = mode
+        self.session_report_dir: Path | None = None
 
         # 基础工具集（共享，每个节点 clone 后按需叠加）
         self.tool_registry: ToolRegistry = build_tool_registry(config, confirmation_handler)
@@ -93,6 +94,11 @@ class ReactAgent:
         from sunday.agent.session_log import SessionLog
         from sunday.tools.cli_tool import make_session_report_dir
 
+        # 首次运行时对所有有 probe 的工具执行端到端探测（B 场景）
+        if not getattr(self, "_probed", False):
+            await self.tool_registry.probe_all()
+            self._probed = True
+
         # 日志目录：优先从 config 读取，不存在时回退默认路径（兼容测试中 mock config）
         log_dir = (self.config.agent.log_dir
                    if getattr(self.config, "agent", None) and self.config.agent.log_dir
@@ -115,6 +121,7 @@ class ReactAgent:
             if report_dir else None
         )
         self.tool_registry.set_report_dir(session_report_dir)
+        self.session_report_dir = session_report_dir
 
         try:
             # L0 上下文注入
@@ -273,7 +280,9 @@ class ReactAgent:
 
     async def evaluate(self, state: AgentState) -> str:
         """EVALUATE 阶段：顶层整体评估，生成任务摘要。"""
-        return await self.verifier.evaluate(state, state.team_results)
+        return await self.verifier.evaluate(
+            state, state.team_results, self.tool_registry.agent_written_files
+        )
 
     async def replan(self, step: Step, team_result: TeamResult, state: AgentState) -> list[Step]:
         """顶层局部重规划，失败时返回空列表。"""

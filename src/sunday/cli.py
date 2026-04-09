@@ -145,8 +145,12 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
 
         loop = build_agent_loop(cfg, cli_emit, mode="cli", confirmation_handler=cli_confirm)
         result = await loop.run(state)
+        from sunday.tools.cli_tool import format_report_footer
         click.echo("\n" + "─" * 50)
         click.echo(result)
+        footer = format_report_footer(result, getattr(loop, "session_report_dir", None))
+        if footer:
+            click.echo(footer)
     except Exception as e:
         import httpx
         if isinstance(e, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):

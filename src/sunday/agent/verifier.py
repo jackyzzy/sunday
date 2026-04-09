@@ -64,7 +64,12 @@ class Verifier:
             logger.warning("check LLM 调用失败（%s），默认通过", e)
             return VerifyResult(passed=True, reason=f"验证调用失败，默认通过：{e}")
 
-    async def evaluate(self, state: AgentState, team_results: list[TeamResult]) -> str:
+    async def evaluate(
+        self,
+        state: AgentState,
+        team_results: list[TeamResult],
+        written_files: list[str] | None = None,
+    ) -> str:
         """顶层评估：基于所有 Team 结果生成整体任务摘要。"""
         model_cfg: ModelConfig = self.config.model
         api_key = model_cfg.get_api_key()
@@ -76,9 +81,12 @@ class Verifier:
         if not results_summary:
             results_summary = "无执行记录"
 
+        files_text = "\n".join(f"- {f}" for f in written_files) if written_files else "（无）"
+
         prompt = self._get_evaluate_prompt().format(
             task=state.task,
             results_summary=results_summary,
+            written_files=files_text,
         )
         try:
             return await self._call_llm(prompt, model_cfg, api_key)

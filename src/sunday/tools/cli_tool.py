@@ -99,6 +99,17 @@ def make_session_report_dir(base_dir: Path, task: str, session_id: str) -> Path:
     return base_dir / f"{slug}_{session_id[:6]}"
 
 
+def format_report_footer(result: str, report_dir: "Path | None") -> str:
+    """生成报告目录信息块，供 CLI 打印或 Gateway 拼入 DONE content。"""
+    if not report_dir:
+        return ""
+    lines = [f"\n📁 报告目录：{report_dir}/"]
+    m = re.search(r"最终交付文件：(.+)", result)
+    if m:
+        lines.append(f"   → 最终报告：{m.group(1).strip()}")
+    return "\n".join(lines)
+
+
 def register_cli_tools(registry: "ToolRegistry") -> None:
     """注册所有 CLI 和文件工具到 ToolRegistry。
 
@@ -110,6 +121,7 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
             p = registry._report_dir / p
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
+        registry.add_written_file(p.name)
         return f"已写入：{p}"
 
     tools = [
@@ -147,7 +159,11 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
         (
             ToolMeta(
                 name="write_file",
-                description="写入内容到文件（覆盖）。相对路径自动保存至当前任务报告目录。",
+                description=(
+                    "写入内容到文件（覆盖）。相对路径自动保存至当前任务报告目录。\n"
+                    "命名约定：中间草稿可自由命名；最终交付给用户的报告，"
+                    "文件名应清晰反映内容（如 最终报告.md 或 final_report.md），且每个任务只产出一份最终报告。"
+                ),
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -196,3 +212,80 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
 
     for meta, fn in tools:
         registry.register(meta, fn)
+
+    _register_health_tool(registry)
+
+
+def _register_health_tool(registry: "ToolRegistry") -> None:
+    """注册 check_tool_health 工具（A 场景：主动探测）。"""
+
+    async def check_tool_health(tool_name: str = "") -> str:
+        """探测工具健康状态。
+
+        - tool_name 为空：返回所有工具的健康状态摘要
+        - tool_name 非空：对该工具重新 probe，更新 HealthStore，返回探测结果
+        """
+        health_store = registry._health_store
+
+        if not tool_name:
+            return health_store.summary()
+
+        # 查找 probe 函数
+        meta_pair = registry._tools.get(tool_name)
+        if meta_pair is None:
+            return f"[工具错误] 未知工具：{tool_name}"
+
+        meta, _ = meta_pair
+        from sunday.tools.probe import BUILTIN_PROBES
+        probe_fn = getattr(meta, "probe", None) or BUILTIN_PROBES.get(tool_name)
+
+        if probe_fn is None:
+            current = health_store.get(tool_name)
+            return (
+                f"工具 {tool_name} 未配置 probe，无法主动探测。"
+                f"当前状态：{current.status.value}"
+            )
+
+        try:
+            from sunday.tools.health_store import ErrorType
+            result = await asyncio.wait_for(probe_fn(), timeout=15)
+        except Exception as e:
+            return f"[探测异常] {tool_name} 探测失败：{e}"
+
+        if result.success:
+            health_store.record_probe_success(tool_name)
+            return f"工具 {tool_name} 探测成功，状态已恢复为 healthy"
+        else:
+            health_store.record_probe_failure(
+                tool_name,
+                result.error_type or ErrorType.UNKNOWN,
+                result.detail,
+                result.suggestion,
+            )
+            msg = f"工具 {tool_name} 探测失败：{result.detail}"
+            if result.suggestion:
+                msg += f"\n建议：{result.suggestion}"
+            return msg
+
+    registry.register(
+        ToolMeta(
+            name="check_tool_health",
+            description=(
+                "探测工具的健康状态。tool_name 为空时返回所有工具的健康摘要；"
+                "指定 tool_name 时对该工具发起实时探测并更新状态。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "tool_name": {
+                        "type": "string",
+                        "description": "要探测的工具名（空字符串表示查看全部状态）",
+                    }
+                },
+                "required": [],
+            },
+            is_dangerous=False,
+            timeout=20,
+        ),
+        check_tool_health,
+    )
