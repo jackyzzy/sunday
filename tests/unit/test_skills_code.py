@@ -60,14 +60,3 @@ async def test_run_python_can_write_to_report_dir(registry_with_report_dir):
     assert (report_dir / "result.json").exists(), "result.json 应写入 report_dir"
 
 
-async def test_run_python_module_level_still_works():
-    """skills/code/tools.py 的模块级 run_python 函数仍可直接调用"""
-    import importlib.util
-    from pathlib import Path
-    skill_file = Path(__file__).parents[2] / "skills" / "code" / "tools.py"
-    spec = importlib.util.spec_from_file_location("skills.code.tools", skill_file)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    result = await mod.run_python(code="print('hello')")
-    assert "hello" in result

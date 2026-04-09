@@ -157,9 +157,11 @@ uv run sunday skills list     # 列出所有已发现的技能包
 | `/think <level>` | 设置思考深度（off/minimal/low/medium/high） |
 | `/model <provider/id>` | 临时切换模型 |
 | `/abort` | 中止当前任务（同 Escape） |
-| `/memory` | 查看当前记忆摘要 |
+| `/memory [SOUL\|MEMORY\|USER\|TOOLS]` | 查看记忆文件内容（默认 MEMORY） |
 | `/skills` | 列出已加载的技能 |
 | `/reset` | 清空当前会话上下文 |
+| `/history` | 查看当前会话历史记录 |
+| `/trust` | 启用信任模式，危险操作自动确认（当前会话有效） |
 
 ---
 
@@ -173,7 +175,7 @@ uv run sunday skills list     # 列出所有已发现的技能包
 |------|------|
 | `files` | 文件读写、目录列表、内容全文搜索、批量重命名 |
 | `web_search` | 网络搜索（Tavily API）、URL 内容抓取 |
-| `code` | 执行 Python 代码片段 |
+| `code` | 代码阅读与分析辅助，提供工具组合约定（执行能力由内置 `run_python`/`run_shell` 提供） |
 | `email` | Gmail 收件箱管理、邮件阅读与发送（需 OAuth2） |
 | `calendar` | Google 日历事件查看与创建（需 OAuth2） |
 
@@ -251,7 +253,7 @@ author: your_name
 
 ## 自定义工具
 
-除内置工具（`read_file`、`write_file`、`list_dir`、`search_files`、`run_shell`）外，你可以在 `workspace/tools/` 目录下添加自定义工具，无需修改源码。
+除内置工具（`read_file`、`write_file`、`list_dir`、`search_files`、`content_search`、`run_shell`、`run_python`）外，你可以在 `workspace/tools/` 目录下添加自定义工具，无需修改源码。
 
 ### 添加自定义工具
 
@@ -287,13 +289,23 @@ TOOLS = [
 - 同名工具会覆盖内置工具
 - 加载失败只记录警告，不影响其他工具运行
 
-### write_file 报告目录
+### 报告目录路由
 
-`write_file` 使用相对路径时，文件自动保存到当前任务的专属报告目录（`~/.sunday/reports/{task}_{session}/`），无需手动指定完整路径：
+`write_file` 和 `read_file` 使用相对路径时，自动路由到当前任务的专属报告目录（`~/.sunday/reports/{task}_{session}/`），无需手动指定完整路径：
 
 ```
 # agent 调用示例
 write_file("report.md", "...")   # → ~/.sunday/reports/帮我分析_a1b2c3/report.md
+read_file("report.md")           # → 优先读取 ~/.sunday/reports/帮我分析_a1b2c3/report.md
+```
+
+`run_python` 执行的子进程可通过环境变量 `SUNDAY_REPORT_DIR` 获取报告目录路径，写入文件时请使用此变量而非硬编码路径：
+
+```python
+import os
+report_dir = os.environ.get("SUNDAY_REPORT_DIR", ".")
+with open(f"{report_dir}/result.json", "w") as f:
+    f.write(data)
 ```
 
 ---
@@ -552,9 +564,8 @@ sunday/
 │   ├── config.py              # 配置加载（Pydantic）
 │   ├── cli.py                 # CLI 入口（Click）
 │   ├── agent/                 # Agent 核心
-│   │   ├── loop.py            # 主循环
+│   │   ├── react_agent.py     # 主循环（AgentLoop）
 │   │   ├── planner.py         # 规划器
-│   │   ├── executor.py        # 执行器（ReAct）
 │   │   ├── verifier.py        # 验证器
 │   │   ├── llm_client.py      # 统一 LLM 调用（Anthropic + OpenAI 兼容）
 │   │   └── models.py          # 数据模型
