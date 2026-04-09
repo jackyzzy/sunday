@@ -29,20 +29,6 @@ async def run_python(code: str) -> str:
         return f"[错误] 代码执行失败：{e}"
 
 
-from sunday.tools.registry import ToolMeta  # noqa: E402
-
-TOOLS = [
-    (ToolMeta(
-        name="run_python",
-        description="在本地子进程中执行 Python 代码片段（10 秒超时）。",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "要执行的 Python 代码"},
-            },
-            "required": ["code"],
-        },
-        is_dangerous=True,
-        timeout=15,
-    ), run_python),
-]
+# run_python 已由 register_cli_tools() 以 closure 方式注册（注入 SUNDAY_REPORT_DIR），
+# 此处不重复注册，避免 load_skill_tools 用无 registry 版本覆盖。
+TOOLS = []

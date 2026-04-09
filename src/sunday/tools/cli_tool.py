@@ -241,6 +241,54 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
     for meta, fn in tools:
         registry.register(meta, fn)
 
+    async def _run_python(code: str) -> str:
+        import os as _os
+        report_dir_val = str(getattr(registry, "_report_dir", None) or "")
+        env = {**_os.environ, "SUNDAY_REPORT_DIR": report_dir_val}
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "python3", "-c", code,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            out = stdout.decode(errors="replace").strip()
+            err = stderr.decode(errors="replace").strip()
+            parts = []
+            if out:
+                parts.append(out)
+            if err:
+                parts.append(f"[stderr] {err}")
+            if proc.returncode != 0:
+                parts.append(f"[returncode={proc.returncode}]")
+            return "\n".join(parts) if parts else ""
+        except asyncio.TimeoutError:
+            return "[超时] Python 代码执行超过 10 秒"
+        except Exception as e:
+            return f"[错误] 代码执行失败：{e}"
+
+    registry.register(
+        ToolMeta(
+            name="run_python",
+            description=(
+                "在本地子进程中执行 Python 代码片段（10 秒超时）。\n"
+                "环境变量 os.environ['SUNDAY_REPORT_DIR'] 已预设为当前任务报告目录，"
+                "输出文件请写入该路径（如：open(os.path.join(os.environ['SUNDAY_REPORT_DIR'], 'data.json'), 'w')）。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "要执行的 Python 代码"},
+                },
+                "required": ["code"],
+            },
+            is_dangerous=True,
+            timeout=15,
+        ),
+        _run_python,
+    )
+
     _register_health_tool(registry)
 
 
