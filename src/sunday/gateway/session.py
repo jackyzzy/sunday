@@ -49,6 +49,16 @@ class SessionManager:
         logger.debug("新会话：%s", sid)
         return sid
 
+    def reset_session(self, session_id: str) -> None:
+        """保留 session_start 行，清空其余历史（同步写入）。"""
+        path = self._dir / f"{session_id}.jsonl"
+        if not path.exists():
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+        first = next((ln for ln in lines if ln.strip()), "")
+        path.write_text((first + "\n") if first else "", encoding="utf-8")
+        logger.debug("会话已重置：%s", session_id)
+
     async def append(self, session_id: str, event_type: "EventType", data: dict) -> None:
         """追加事件到会话 JSONL 文件。"""
         now = datetime.now(timezone.utc).isoformat()

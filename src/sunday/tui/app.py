@@ -165,6 +165,17 @@ class SundayApp(App):
                     for s in sessions
                 )
                 chat.add_system_message(f"会话列表：\n{lines or '  （无）'}")
+            elif cmd == "memory":
+                file_name = payload.get("file", "")
+                content = payload.get("content", "")
+                chat.add_system_message(f"[{file_name}]\n{content}")
+            elif cmd == "skills":
+                skills = payload.get("skills", [])
+                lines = "\n".join(f"  · {s}" for s in skills) or "  （无可用技能）"
+                chat.add_system_message(f"可用技能：\n{lines}")
+            elif msg_text := payload.get("message"):
+                # 通用兜底：trust / reset / history / 未知命令
+                chat.add_system_message(msg_text)
 
     # ── 输入处理 ──────────────────────────────────────────────────────────
 
@@ -188,7 +199,11 @@ class SundayApp(App):
                 msg = Message(
                     type=EventType.SEND,
                     session_id=self.session_id,
-                    data={"content": text},
+                    data={
+                        "content": text,
+                        "thinking_level": self.thinking_level,
+                        "model_override": self.model_override or "",
+                    },
                 )
                 await self._ws.send(msg.to_json())
             except Exception as e:

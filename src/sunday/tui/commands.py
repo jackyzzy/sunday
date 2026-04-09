@@ -20,6 +20,8 @@ Sunday Slash 命令：
   /abort            中止当前运行任务
   /memory [file]    查看记忆文件 (SOUL/MEMORY/USER/TOOLS)
   /skills           列出可用技能
+  /history          查看当前会话历史
+  /trust            启用信任模式，危险操作自动确认（当前会话有效）
   /help             显示此帮助
 """
 
@@ -63,6 +65,10 @@ class SlashCommandHandler:
             return await self._cmd_memory(args)
         if cmd == "skills":
             return await self._cmd_skills()
+        if cmd == "history":
+            return await self._cmd_history()
+        if cmd == "trust":
+            return await self._cmd_trust()
         if cmd == "help":
             return HELP_TEXT
 
@@ -128,3 +134,17 @@ class SlashCommandHandler:
                       data={"command": "skills", "args": ""})
         await self._ws.send(msg.to_json())
         return None
+
+    async def _cmd_history(self) -> str:
+        from sunday.gateway.protocol import EventType, Message
+        msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
+                      data={"command": "history", "args": ""})
+        await self._ws.send(msg.to_json())
+        return None  # 结果由 Gateway 推回
+
+    async def _cmd_trust(self) -> str:
+        from sunday.gateway.protocol import EventType, Message
+        msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
+                      data={"command": "trust", "args": ""})
+        await self._ws.send(msg.to_json())
+        return "已启用信任模式，当前会话的危险操作将自动确认。"

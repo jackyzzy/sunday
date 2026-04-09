@@ -90,7 +90,7 @@ class Gateway:
                     self._connections[session_id] = ws
 
                 if msg.type == EventType.SEND:
-                    await self._handle_send(session_id, msg.data.get("content", ""))
+                    await self._handle_send(session_id, msg.data)
                 elif msg.type == EventType.ABORT:
                     await self._handle_abort(session_id)
                 elif msg.type == EventType.SLASH:
@@ -104,8 +104,12 @@ class Gateway:
             if session_id and self._connections.get(session_id) is ws:
                 del self._connections[session_id]
 
-    async def _handle_send(self, session_id: str, content: str) -> None:
+    async def _handle_send(self, session_id: str, data: dict) -> None:
         """处理用户发送消息：检查串行，创建 AgentLoop Task。"""
+        content = data.get("content", "")
+        thinking_raw = data.get("thinking_level", "")
+        model_override = data.get("model_override") or None
+
         # 串行检查
         if session_id in self._running_tasks and not self._running_tasks[session_id].done():
             await self.emit(session_id, EventType.STATUS, {
@@ -118,11 +122,16 @@ class Gateway:
         await self._session_mgr.append(session_id, EventType.SEND, {"content": content})
 
         # 构建 AgentLoop 并异步运行
-        from sunday.agent.models import AgentState, Message
+        from sunday.agent.models import AgentState, Message, ThinkingLevel
         # 读取最近对话历史注入 Planner 上下文
         recent_events = self._session_mgr.load_history(session_id, max_events=50)
         history = _extract_conversation(recent_events, max_turns=5)
-        state = AgentState(session_id=session_id, task=content, history=history)
+        try:
+            thinking = ThinkingLevel(thinking_raw)
+        except ValueError:
+            thinking = ThinkingLevel(self._settings.sunday.reasoning.thinking_level)
+        state = AgentState(session_id=session_id, task=content, history=history,
+                           thinking_level=thinking)
 
         async def run_loop():
             try:
@@ -130,7 +139,8 @@ class Gateway:
                 if self._mock_loop_run is not None:
                     result = await self._mock_loop_run(state)
                 else:
-                    loop = self._build_agent_loop(session_id, task=content)
+                    loop = self._build_agent_loop(session_id, task=content,
+                                                  model_override=model_override)
                     result = await loop.run(state)
                 from sunday.tools.cli_tool import format_report_footer
                 footer = format_report_footer(
@@ -183,12 +193,47 @@ class Gateway:
             await self.emit(session_id, EventType.SLASH_RESULT, {
                 "command": "history",
                 "events": history,
+                "message": f"历史记录共 {len(history)} 条事件。",
             })
         elif command == "trust":
             self._trusted_sessions.add(session_id)
             await self.emit(session_id, EventType.SLASH_RESULT, {
                 "command": "trust",
                 "message": "当前会话已启用信任模式，所有危险操作将自动确认。",
+            })
+        elif command == "reset":
+            self._session_mgr.reset_session(session_id)
+            await self.emit(session_id, EventType.SLASH_RESULT, {
+                "command": "reset",
+                "message": "会话上下文已清空。",
+            })
+        elif command == "memory":
+            file_key = data.get("args", "MEMORY").upper()
+            _FILE_MAP = {
+                "SOUL": "SOUL.md",
+                "MEMORY": "MEMORY.md",
+                "USER": "memory/user.md",
+                "TOOLS": "memory/tools.md",
+            }
+            workspace = self._settings.sunday.agent.workspace_dir
+            target = workspace / _FILE_MAP.get(file_key, "MEMORY.md")
+            content = target.read_text(encoding="utf-8") if target.exists() else "（文件不存在）"
+            await self.emit(session_id, EventType.SLASH_RESULT, {
+                "command": "memory",
+                "file": target.name,
+                "content": content[:4000],
+            })
+        elif command == "skills":
+            from sunday.skills.loader import SkillLoader
+            workspace = self._settings.sunday.agent.workspace_dir
+            loader = SkillLoader(
+                project_skills_dir=workspace.parent.parent / "skills",
+                user_skills_dir=workspace / "skills",
+            )
+            skill_list = [m.name for m in loader.discover()]
+            await self.emit(session_id, EventType.SLASH_RESULT, {
+                "command": "skills",
+                "skills": skill_list,
             })
         else:
             await self.emit(session_id, EventType.SLASH_RESULT, {
@@ -238,11 +283,20 @@ class Gateway:
 
     # ── 私有构建方法 ──────────────────────────────────────────────────────
 
-    def _build_agent_loop(self, session_id: str, task: str = ""):
+    def _build_agent_loop(self, session_id: str, task: str = "",
+                           model_override: str | None = None):
         """构建完整 AgentLoop（注入所有依赖）。"""
         from sunday.bootstrap import build_agent_loop
 
         cfg = self._settings.sunday  # SundayConfig
+
+        if model_override:
+            parts = model_override.split("/", 1)
+            new_model = cfg.model.model_copy(
+                update={"provider": parts[0], "id": parts[1]} if len(parts) == 2
+                else {"id": parts[0]}
+            )
+            cfg = cfg.model_copy(update={"model": new_model})
 
         async def gw_confirm(tool_name: str, arguments: dict, _sid: str) -> bool:
             if session_id in self._trusted_sessions:
