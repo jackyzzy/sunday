@@ -15,14 +15,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def run_shell(command: str, timeout: int = 30) -> str:
-    """执行 shell 命令，返回 stdout + stderr。"""
+async def run_shell(command: str, timeout: int = 30, env: dict | None = None) -> str:
+    """执行 shell 命令，返回 stdout + stderr。env 为 None 时继承当前进程环境。"""
     try:
         proc = await asyncio.wait_for(
             asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             ),
             timeout=timeout,
         )
@@ -124,11 +125,35 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
         registry.add_written_file(p.name)
         return f"已写入：{p}"
 
+    async def _run_shell(command: str, timeout: int = 30) -> str:
+        import os as _os
+        report_dir_val = str(getattr(registry, "_report_dir", None) or "")
+        env = {**_os.environ, "SUNDAY_REPORT_DIR": report_dir_val}
+        return await run_shell(command, timeout, env=env)
+
+    async def _read_file(path: str) -> str:
+        p = Path(path)
+        if not p.is_absolute() and getattr(registry, "_report_dir", None):
+            report_path = registry._report_dir / p
+            if report_path.exists():
+                try:
+                    return report_path.read_text(encoding="utf-8")
+                except Exception as e:
+                    return f"[错误] 读取文件失败：{e}"
+        try:
+            return p.read_text(encoding="utf-8")
+        except Exception as e:
+            return f"[错误] 读取文件失败：{e}"
+
     tools = [
         (
             ToolMeta(
                 name="run_shell",
-                description="执行 shell 命令，返回 stdout/stderr 输出。",
+                description=(
+                    "执行 shell 命令，返回 stdout/stderr 输出。\n"
+                    "环境变量 $SUNDAY_REPORT_DIR 已预设为当前任务报告目录，"
+                    "输出文件请写入该目录（如：echo '...' > \"$SUNDAY_REPORT_DIR/data.json\"）。"
+                ),
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -140,21 +165,24 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
                 is_dangerous=False,
                 timeout=30,
             ),
-            run_shell,
+            _run_shell,
         ),
         (
             ToolMeta(
                 name="read_file",
-                description="读取本地文件内容。",
+                description=(
+                    "读取本地文件内容。相对路径优先在当前任务报告目录中查找，"
+                    "不存在时 fallback 到给定路径（适合读取项目源码等绝对路径文件）。"
+                ),
                 input_schema={
                     "type": "object",
-                    "properties": {"path": {"type": "string", "description": "文件路径"}},
+                    "properties": {"path": {"type": "string", "description": "文件路径（报告目录内只需文件名即可）"}},
                     "required": ["path"],
                 },
                 is_dangerous=False,
                 timeout=10,
             ),
-            read_file,
+            _read_file,
         ),
         (
             ToolMeta(
