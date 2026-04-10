@@ -6,22 +6,13 @@ import logging
 from typing import TYPE_CHECKING
 
 from sunday.agent.llm_client import LLMClient
-from sunday.agent.models import AgentState, Plan, Step, ThinkingLevel
+from sunday.agent.models import THINKING_BUDGET, AgentState, Plan, Step, ThinkingLevel
 from sunday.agent.utils import strip_code_fence
 
 if TYPE_CHECKING:
     from sunday.config import ModelConfig, SundayConfig
 
 logger = logging.getLogger(__name__)
-
-# thinking_level → budget_tokens
-THINKING_BUDGET: dict[ThinkingLevel, int] = {
-    ThinkingLevel.OFF: 0,
-    ThinkingLevel.MINIMAL: 512,
-    ThinkingLevel.LOW: 1024,
-    ThinkingLevel.MEDIUM: 4096,
-    ThinkingLevel.HIGH: 8192,
-}
 
 
 class Planner:

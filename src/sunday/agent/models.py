@@ -16,6 +16,15 @@ class ThinkingLevel(str, Enum):
     HIGH = "high"
 
 
+THINKING_BUDGET: dict["ThinkingLevel", int] = {
+    ThinkingLevel.OFF: 0,
+    ThinkingLevel.MINIMAL: 512,
+    ThinkingLevel.LOW: 1024,
+    ThinkingLevel.MEDIUM: 4096,
+    ThinkingLevel.HIGH: 8192,
+}
+
+
 class StepStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"

@@ -21,7 +21,7 @@ model:
   provider: openai
   id: deepseek-chat
   temperature: 0.2
-  max_tokens: 8192
+  max_tokens: 20480
   base_url: https://api.deepseek.com/v1
   api_key_env: DEEPSEEK_API_KEY
 #
@@ -55,10 +55,9 @@ model:
 reasoning:
   max_steps: 20               # 任务顶层步骤数上限（超出则截断）
   max_react_iteration: 40     # 单个子步骤内 ReAct 工具调用轮次上限
-  max_replans_per_step: 5     # Team 内层每个子步骤最多重规划次数
+  max_replans_per_step: 10    # Team 内层每个子步骤最多重规划次数
   max_replans: 40             # 整个任务外层重规划总次数兜底上限
   thinking_level: medium  # off | minimal | low | medium | high
-  thinking_budget_tokens: 4096
 
 memory:
   consolidation_cron: "0 4 * * *"
@@ -66,8 +65,8 @@ memory:
   l0_max_lines: 100
 
 tools:
-  default_timeout: 30
-  max_output_chars: 4096
+  default_timeout: 60
+  max_output_chars: 20480
   sandbox_mode: true
   allow_list: []
   deny_list:

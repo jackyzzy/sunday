@@ -66,6 +66,7 @@ class ReactAgent:
         self.emit = emit or noop_emit
         self.mode = mode
         self.session_report_dir: Path | None = None
+        self._probed: bool = False
 
         # 基础工具集（共享，每个节点 clone 后按需叠加）
         self.tool_registry: ToolRegistry = build_tool_registry(config, confirmation_handler)
@@ -95,7 +96,7 @@ class ReactAgent:
         from sunday.tools.cli_tool import make_session_report_dir
 
         # 首次运行时对所有有 probe 的工具执行端到端探测（B 场景）
-        if not getattr(self, "_probed", False):
+        if not self._probed:
             await self.tool_registry.probe_all()
             self._probed = True
 

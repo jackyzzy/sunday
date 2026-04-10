@@ -67,8 +67,8 @@ class SimpleAgent:
         }
 
         # 扩展思考
-        budget_map = {"off": 0, "minimal": 512, "low": 1024, "medium": 4096, "high": 8192}
-        budget = budget_map.get(self.thinking_level, 4096)
+        from sunday.agent.models import THINKING_BUDGET
+        budget = THINKING_BUDGET.get(self.thinking_level, 4096)
         if budget > 0:
             body["thinking"] = {"type": "enabled", "budget_tokens": budget}
 
