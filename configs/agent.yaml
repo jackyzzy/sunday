@@ -53,10 +53,10 @@ model:
 #   api_key_env: null
 
 reasoning:
-  max_steps: 10               # 任务顶层步骤数上限（超出则截断）
-  max_react_iteration: 20     # 单个子步骤内 ReAct 工具调用轮次上限
+  max_steps: 20               # 任务顶层步骤数上限（超出则截断）
+  max_react_iteration: 40     # 单个子步骤内 ReAct 工具调用轮次上限
   max_replans_per_step: 5     # Team 内层每个子步骤最多重规划次数
-  max_replans: 20             # 整个任务外层重规划总次数兜底上限
+  max_replans: 40             # 整个任务外层重规划总次数兜底上限
   thinking_level: medium  # off | minimal | low | medium | high
   thinking_budget_tokens: 4096
 
