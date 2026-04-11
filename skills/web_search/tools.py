@@ -46,21 +46,22 @@ async def web_search(query: str, max_results: int = 5) -> str:
             raw = r.get("published_date") or ""
             try:
                 return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
+            except ValueError:
                 return None
 
-        def _sort_key(r):
-            d = _parse_date(r)
-            return (d is None, -d.timestamp() if d else 0)
-
-        sorted_results = sorted(results[:max_results], key=_sort_key)
+        results_with_dates = [
+            (r, _parse_date(r)) for r in results[:max_results]
+        ]
+        sorted_results = sorted(
+            results_with_dates,
+            key=lambda x: (x[1] is None, -x[1].timestamp() if x[1] else 0),
+        )
 
         lines = []
-        for i, r in enumerate(sorted_results, 1):
+        for i, (r, d) in enumerate(sorted_results, 1):
             title = r.get("title", "（无标题）")
             url = r.get("url", "")
             snippet = r.get("content", "")[:200].replace("\n", " ")
-            d = _parse_date(r)
             date_label = f"  发布：{d.strftime('%Y-%m-%d')}" if d else ""
             lines.append(f"{i}. **{title}**{date_label}\n   {url}\n   {snippet}")
 
