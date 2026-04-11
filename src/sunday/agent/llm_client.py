@@ -8,6 +8,21 @@ import httpx
 if TYPE_CHECKING:
     from sunday.config import ModelConfig
 
+# 模块级连接池：复用 AsyncClient，避免每次调用重建 TCP/TLS 连接
+# 延迟初始化，便于测试通过 patch("sunday.agent.llm_client._HTTP_CLIENT", mock) 替换
+# 不设 base_url，每次传入完整 URL；timeout=None 表示由各请求独立控制
+_HTTP_CLIENT: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None:
+        _HTTP_CLIENT = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            timeout=None,
+        )
+    return _HTTP_CLIENT
+
 
 class LLMClient:
     """最小化 LLM 调用封装，支持 Anthropic 和 OpenAI 兼容接口。
@@ -137,12 +152,12 @@ class LLMClient:
         if thinking_budget > 0:
             body["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages", headers=headers, json=body
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await _get_http_client().post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers, json=body, timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
         # 提取工具调用到统一格式
         tool_use_blocks = [b for b in data.get("content", []) if b.get("type") == "tool_use"]
@@ -202,17 +217,16 @@ class LLMClient:
             ]
 
         base = (model_cfg.base_url or "https://api.openai.com/v1").rstrip("/")
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{base}/chat/completions", headers=headers, json=body
+        resp = await _get_http_client().post(
+            f"{base}/chat/completions", headers=headers, json=body, timeout=timeout,
+        )
+        if not resp.is_success:
+            import logging
+            logging.getLogger(__name__).error(
+                "LLM API %d 错误，响应体：%s", resp.status_code, resp.text[:500]
             )
-            if not resp.is_success:
-                import logging
-                logging.getLogger(__name__).error(
-                    "LLM API %d 错误，响应体：%s", resp.status_code, resp.text[:500]
-                )
-            resp.raise_for_status()
-            data = resp.json()
+        resp.raise_for_status()
+        data = resp.json()
 
         # 规范化为统一格式
         choice = data["choices"][0]

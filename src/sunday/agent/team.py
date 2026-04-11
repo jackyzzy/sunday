@@ -73,8 +73,8 @@ class Team:
         max_sub_replans = self.planner.config.reasoning.max_replans_per_step
         sub_steps = list(sub_plan.steps)
         idx = 0
-        # 每个子步骤独立计数，互不影响（避免单个子步骤无限重规划）
-        sub_replan_counts: dict[str, int] = {}
+        # 全局计数：无论重规划产生的新步骤 id 是否变化，总次数统一管控
+        total_sub_replan_count = 0
         broke_on_failure = False
         last_verify_should_replan = True  # 记录最后失败步骤的 should_replan，供外层决策
 
@@ -111,12 +111,11 @@ class Team:
                 continue
 
             # 子步骤失败：尝试内层重规划（仅当验证器认为有意义时）
-            step_replan_count = sub_replan_counts.get(sub_step.id, 0)
-            if step_replan_count < max_sub_replans and verify.should_replan:
-                sub_replan_counts[sub_step.id] = step_replan_count + 1
+            if total_sub_replan_count < max_sub_replans and verify.should_replan:
+                total_sub_replan_count += 1
                 logger.info(
                     "Team %s 子步骤 %s 失败，触发子任务重规划（%d/%d）",
-                    step.id, sub_step.id, step_replan_count + 1, max_sub_replans,
+                    step.id, sub_step.id, total_sub_replan_count, max_sub_replans,
                 )
                 try:
                     # 使用专用的 sub_replan()，而非外层的 replan()，避免影响顶层计划

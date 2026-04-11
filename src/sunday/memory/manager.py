@@ -155,8 +155,8 @@ class MemoryManager:
         """会话结束时调用：同步写今日日志，异步触发 AI 整合。"""
         # 同步：写任务摘要到今日日志
         steps_summary = "\n".join(
-            f"- {r.step_id}（{r.status.value}）：{r.output[:200]}"
-            for r in state.step_results
+            f"- {r.step_id}（{'✓' if r.passed else '✗'}）：{r.output[:200]}"
+            for r in state.team_results
         )
         log_content = (
             f"\n## 任务：{state.task}\n"

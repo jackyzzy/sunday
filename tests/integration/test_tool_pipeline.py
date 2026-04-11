@@ -82,7 +82,7 @@ async def test_guard_truncates_in_pipeline(tmp_path):
         is_dangerous=False,
         timeout=5,
     )
-    registry.register(meta, AsyncMock(return_value="x" * 10000))
+    registry.register(meta, AsyncMock(return_value="x" * 30000))
     result = await registry.execute("big_tool", {}, "sess")
-    # 不应超过 max_output_chars 太多（截断后带提示）
-    assert len(result) < 10000
+    # 不应超过 max_output_chars（20480）太多（截断后带提示）
+    assert len(result) < 30000

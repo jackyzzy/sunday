@@ -91,7 +91,7 @@ async def test_run_success_no_tools(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         result = await executor.run(step, state)
 
@@ -124,7 +124,7 @@ async def test_run_with_tool_then_stop(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         result = await executor.run(step, state)
 
@@ -157,7 +157,7 @@ async def test_max_steps_forced_finish(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         result = await executor.run(step, state)
 
@@ -185,7 +185,7 @@ async def test_repetition_error(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         with pytest.raises(RepetitionError):
             await executor.run(step, state)
@@ -209,7 +209,7 @@ async def test_no_tool_registry_completes(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         result = await executor.run(step, state)
 
@@ -230,7 +230,7 @@ async def test_executor_uses_zero_temperature(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         await executor.run(step, state)
 
@@ -315,7 +315,7 @@ async def test_call_openai_tools_format(tmp_path):
 
     with (
         patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deepseek-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         await executor.run(step, state)
 
@@ -350,7 +350,7 @@ async def test_call_openai_tool_call_id_preserved(tmp_path):
 
     with (
         patch.dict(os.environ, {"OPENAI_API_KEY": "sk-openai-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         result = await executor.run(step, state)
 
@@ -394,7 +394,7 @@ async def test_run_openai_tool_message_format(tmp_path):
 
     with (
         patch.dict(os.environ, {"OPENAI_API_KEY": "sk-openai-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         result = await executor.run(step, state)
 

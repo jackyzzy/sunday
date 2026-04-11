@@ -65,6 +65,7 @@ def _make_mock_agent(plan, evaluate_return="任务完成！"):
     agent.planner = planner
     agent.verifier = verifier
     agent.tool_registry = MagicMock()
+    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
     agent.tool_registry.clone = MagicMock(return_value=MagicMock())
     agent.tool_registry.set_report_dir = MagicMock()
     agent.context_builder = None
@@ -170,6 +171,7 @@ async def test_team_failure_triggers_replan(tmp_path):
     agent.planner = planner
     agent.verifier = verifier
     agent.tool_registry = MagicMock()
+    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
     agent.tool_registry.clone = MagicMock(return_value=MagicMock())
     agent.tool_registry.set_report_dir = MagicMock()
     agent.context_builder = None
@@ -219,6 +221,7 @@ async def test_team_failure_no_replan_continues(tmp_path):
     agent.planner = planner
     agent.verifier = verifier
     agent.tool_registry = MagicMock()
+    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
     agent.tool_registry.clone = MagicMock(return_value=MagicMock())
     agent.tool_registry.set_report_dir = MagicMock()
     agent.context_builder = None
@@ -264,6 +267,7 @@ async def test_deps_satisfied_skips_unmet(tmp_path):
     agent.planner = planner
     agent.verifier = verifier
     agent.tool_registry = MagicMock()
+    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
     agent.tool_registry.clone = MagicMock(return_value=MagicMock())
     agent.tool_registry.set_report_dir = MagicMock()
     agent.context_builder = None
@@ -314,6 +318,7 @@ async def test_loop_injects_context_into_planner(tmp_path):
     agent.planner = planner
     agent.verifier = verifier
     agent.tool_registry = MagicMock()
+    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
     agent.tool_registry.clone = MagicMock(return_value=MagicMock())
     agent.tool_registry.set_report_dir = MagicMock()
     agent.context_builder = context_builder
@@ -356,6 +361,7 @@ async def test_loop_calls_memory_consolidate(tmp_path):
     agent.planner = planner
     agent.verifier = verifier
     agent.tool_registry = MagicMock()
+    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
     agent.tool_registry.clone = MagicMock(return_value=MagicMock())
     agent.tool_registry.set_report_dir = MagicMock()
     agent.context_builder = None

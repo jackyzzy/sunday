@@ -50,6 +50,8 @@ class ReactAgent:
     各自接收 clone 后的 ToolRegistry 副本，可独立叠加专属技能工具。
     """
 
+    _probed: bool = False  # 类变量默认值，测试通过 __new__ 绕过 __init__ 时也生效
+
     def __init__(
         self,
         config: "SundayConfig",
@@ -95,6 +97,9 @@ class ReactAgent:
         from sunday.agent.session_log import SessionLog
         from sunday.tools.cli_tool import make_session_report_dir
 
+        # 每次任务开始时重置文件写入记录，避免跨会话污染
+        self.tool_registry._agent_written_files = []
+
         # 首次运行时对所有有 probe 的工具执行端到端探测（B 场景）
         if not self._probed:
             await self.tool_registry.probe_all()
@@ -133,6 +138,11 @@ class ReactAgent:
             # THINK + PLAN
             plan = await self.plan(state)
             state.plan = plan
+            if not plan.steps:
+                msg = "规划失败：LLM 未能生成有效的执行步骤，请重试或简化任务描述。"
+                logger.warning(msg)
+                session_log.log_end(msg, [])
+                return msg
             max_steps = self.config.reasoning.max_steps
             if len(plan.steps) > max_steps:
                 logger.warning("计划步骤数 %d 超过上限 %d，已截断", len(plan.steps), max_steps)
@@ -184,6 +194,11 @@ class ReactAgent:
         max_replans = reasoning.max_replans
 
         steps = list(state.plan.steps)
+        cycle = self._detect_dependency_cycle(steps)
+        if cycle:
+            msg = f"规划错误：检测到循环依赖 {' → '.join(cycle)}，任务无法执行。"
+            logger.error(msg)
+            return msg
         idx = 0
         total_replan_count = 0
 
@@ -241,8 +256,10 @@ class ReactAgent:
                     if new_steps:
                         steps = steps[:idx] + new_steps
                         state.plan.steps = steps
-                        state.team_results.append(team_result)
                         replan_took_over = True
+                        logger.debug(
+                            "步骤 %s 失败结果已丢弃，由重规划步骤替代", step.id
+                        )
                     break
                 else:
                     logger.warning(
@@ -392,3 +409,38 @@ class ReactAgent:
             return True
         done_ids = {tr.step_id for tr in state.team_results if tr.passed}
         return all(dep in done_ids for dep in step.depends_on)
+
+    @staticmethod
+    def _detect_dependency_cycle(steps: list[Step]) -> list[str] | None:
+        """Kahn 算法拓扑排序检测循环依赖。
+
+        返回 None 表示无环；返回循环路径列表（包含首尾同一节点）表示存在环。
+        """
+        from collections import deque
+
+        step_ids = {s.id for s in steps}
+        in_degree: dict[str, int] = {s.id: 0 for s in steps}
+        graph: dict[str, list[str]] = {s.id: [] for s in steps}
+
+        for s in steps:
+            for dep in s.depends_on:
+                if dep in step_ids:  # 忽略引用了不存在步骤的依赖
+                    graph[dep].append(s.id)
+                    in_degree[s.id] += 1
+
+        queue = deque(sid for sid, deg in in_degree.items() if deg == 0)
+        visited = 0
+        while queue:
+            node = queue.popleft()
+            visited += 1
+            for neighbor in graph[node]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+
+        if visited == len(steps):
+            return None  # 无环
+
+        # 找出仍有入度的节点（环的成员），返回其 id 列表作为提示
+        cycle_nodes = [sid for sid, deg in in_degree.items() if deg > 0]
+        return cycle_nodes

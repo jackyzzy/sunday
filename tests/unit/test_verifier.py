@@ -58,7 +58,7 @@ async def test_check_passed(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_cl),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_cl),
     ):
         vr = await verifier.check(step, result, state)
 
@@ -81,7 +81,7 @@ async def test_check_failed_should_replan(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_cl),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_cl),
     ):
         vr = await verifier.check(step, result, state)
 
@@ -104,7 +104,7 @@ async def test_check_failed_no_replan(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_cl),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_cl),
     ):
         vr = await verifier.check(step, result, state)
 
@@ -141,7 +141,7 @@ async def test_check_markdown_code_block_response(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_cl),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_cl),
     ):
         vr = await verifier.check(step, result, state)
 
@@ -161,7 +161,7 @@ async def test_check_invalid_json_falls_back_to_passed(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_cl),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_cl),
     ):
         vr = await verifier.check(step, result, state)
 

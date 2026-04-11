@@ -76,7 +76,7 @@ async def test_think_and_plan_returns_plan(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         plan = await planner.think_and_plan(state)
 
@@ -97,7 +97,7 @@ async def test_think_and_plan_thinking_off_no_budget(tmp_path):
     state = AgentState(session_id="s1", task="test", thinking_level=ThinkingLevel.OFF)
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         await planner.think_and_plan(state)
 
@@ -116,7 +116,7 @@ async def test_think_and_plan_thinking_high_budget(tmp_path):
     state = AgentState(session_id="s1", task="test", thinking_level=ThinkingLevel.HIGH)
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         await planner.think_and_plan(state)
 
@@ -135,7 +135,7 @@ async def test_think_and_plan_uses_low_temperature(tmp_path):
     state = AgentState(session_id="s1", task="test", thinking_level=ThinkingLevel.OFF)
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         await planner.think_and_plan(state)
 
@@ -155,7 +155,7 @@ async def test_think_and_plan_parses_markdown_code_block(tmp_path):
     state = AgentState(session_id="s1", task="test", thinking_level=ThinkingLevel.OFF)
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         plan = await planner.think_and_plan(state)
 
@@ -180,7 +180,7 @@ async def test_think_and_plan_thinking_block_in_response(tmp_path):
     state = AgentState(session_id="s1", task="test", thinking_level=ThinkingLevel.MEDIUM)
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         plan = await planner.think_and_plan(state)
 
@@ -227,7 +227,7 @@ async def test_replan_returns_new_steps(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         new = await planner.replan(failed_step, "失败原因", state)
 
@@ -303,7 +303,7 @@ async def test_replan_handles_markdown_wrapped_json(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         new = await planner.replan(failed_step, "原因", state)
 
@@ -326,7 +326,7 @@ async def test_replan_handles_empty_response(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         new = await planner.replan(failed_step, "原因", state)
 
@@ -353,7 +353,7 @@ async def test_replan_handles_think_tag_before_json(tmp_path):
 
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("httpx.AsyncClient", return_value=mock_client),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
     ):
         new = await planner.replan(failed_step, "原因", state)
 
