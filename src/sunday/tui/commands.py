@@ -111,8 +111,11 @@ class SlashCommandHandler:
     async def _cmd_session(self, args: str) -> str:
         if not args:
             return f"当前会话：{self._app.session_id}"
-        self._app.session_id = args
-        return f"已切换到会话：{args}"
+        # 标准化：将下划线转为连字符（UUID 标准格式）
+        normalized = args.replace("_", "-")
+        self._app.session_id = normalized
+        self._app._refresh_info_bar()
+        return f"已切换到会话：{normalized}"
 
     async def _cmd_reset(self) -> str:
         from sunday.gateway.protocol import EventType, Message

@@ -121,7 +121,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
     try:
         level = ThinkingLevel(thinking)
         state = AgentState(
-            session_id=uuid.uuid4().hex[:12],
+            session_id=str(uuid.uuid4()),
             task=task,
             thinking_level=level,
         )

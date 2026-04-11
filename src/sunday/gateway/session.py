@@ -32,7 +32,7 @@ class SessionManager:
 
     def new_session(self) -> str:
         """创建新会话，返回 12 位 hex session_id。"""
-        sid = uuid.uuid4().hex[:12]
+        sid = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         # 写 session_start 行
         path = self._dir / f"{sid}.jsonl"
@@ -94,8 +94,24 @@ class SessionManager:
         return events[-max_events:]
 
     def list_sessions(self) -> list[dict]:
-        """返回所有会话元数据，按 last_active 倒序。"""
-        return sorted(self._index, key=lambda s: s.get("last_active", ""), reverse=True)
+        """返回所有会话元数据，按 last_active 倒序。
+
+        扫描目录下所有 .jsonl 文件，补充 index.json 未记录的历史 session。
+        """
+        indexed = {m["session_id"]: m for m in self._index}
+        for path in self._dir.glob("*.jsonl"):
+            sid = path.stem
+            if sid == "index":
+                continue
+            if sid not in indexed:
+                try:
+                    first = path.read_text(encoding="utf-8").splitlines()[0]
+                    data = json.loads(first)
+                    ts = data.get("ts", "")
+                except Exception:
+                    ts = ""
+                indexed[sid] = {"session_id": sid, "last_active": ts, "created_at": ts}
+        return sorted(indexed.values(), key=lambda s: s.get("last_active", ""), reverse=True)
 
     # ── 私有方法 ──────────────────────────────────────────────────────────
 
