@@ -110,7 +110,7 @@ from sunday.tools.registry import ToolMeta  # noqa: E402
 TOOLS = [
     (ToolMeta(
         name="web_search",
-        description="使用 Tavily API 搜索网络，返回标题+摘要列表。需配置 TAVILY_API_KEY。",
+        description="使用 Tavily API 搜索网络，返回按发布日期降序排列的标题+摘要列表。需配置 TAVILY_API_KEY。",
         input_schema={
             "type": "object",
             "properties": {
