@@ -54,12 +54,12 @@ class Gateway:
     async def start(self, port: int = DEFAULT_PORT) -> None:
         """启动 WebSocket 服务（永久运行）。"""
         logger.info("Gateway 启动，监听 ws://localhost:%d", port)
-        async with serve(self._handle, "localhost", port):
+        async with serve(self._handle, "localhost", port, ping_interval=None):
             await asyncio.Future()  # 永久挂起
 
     async def start_test(self, port: int = 0) -> int:
         """测试用：绑定随机端口，不阻塞，返回实际端口。"""
-        self._server = await serve(self._handle, "localhost", port)
+        self._server = await serve(self._handle, "localhost", port, ping_interval=None)
         actual_port = self._server.sockets[0].getsockname()[1]
         logger.debug("Gateway 测试模式，端口=%d", actual_port)
         return actual_port

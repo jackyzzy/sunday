@@ -135,18 +135,32 @@ class SundayApp(App):
 
     @work(exclusive=False, thread=False)
     async def _connect_worker(self) -> None:
-        """后台 Worker：连接 Gateway，循环接收事件。"""
-        try:
-            import websockets
-            async with websockets.connect(self.gateway_url) as ws:
-                self._ws = ws
-                self._slash_handler = SlashCommandHandler(app=self, ws=ws)
-                await self._recv_loop(ws)
-        except Exception as e:
-            logger.warning("Gateway 连接失败：%s", e)
-            self.query_one(ChatLog).add_system_message(
-                f"Gateway 未连接（{e}）。请先运行 sunday gateway start"
-            )
+        """后台 Worker：连接 Gateway，循环接收事件，断连后自动重连。"""
+        import websockets
+
+        while True:
+            try:
+                async with websockets.connect(
+                    self.gateway_url, ping_interval=None
+                ) as ws:
+                    self._ws = ws
+                    self._slash_handler = SlashCommandHandler(app=self, ws=ws)
+                    await self._recv_loop(ws)
+                # _recv_loop 正常退出（连接被对端关闭），自动重连
+                self._ws = None
+                await asyncio.sleep(1)
+            except OSError:
+                # Gateway 未启动，不重连，只提示一次
+                self._ws = None
+                self.query_one(ChatLog).add_system_message(
+                    "Gateway 未连接，请先运行 sunday gateway start"
+                )
+                break
+            except Exception as e:
+                # 其他异常（含 ConnectionClosed）：短暂等待后重连
+                logger.warning("Gateway 连接断开，尝试重连：%s", e)
+                self._ws = None
+                await asyncio.sleep(1)
 
     async def _recv_loop(self, ws) -> None:
         """持续接收 Gateway 推送事件。"""
