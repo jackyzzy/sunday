@@ -170,8 +170,26 @@ class Planner:
 
     @staticmethod
     def _parse_plan(text: str, thinking: str | None = None) -> Plan:
-        """解析 JSON 格式的 Plan，容错处理 markdown 代码块。"""
+        """解析 JSON 格式的 Plan，容错处理 markdown 代码块及前后多余文字。"""
+        import re
         text = strip_code_fence(text)
-        data = json.loads(text)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            # 部分模型（DeepSeek 等）在 JSON 前后附加说明文字，尝试提取第一个完整 JSON 对象
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            if match:
+                try:
+                    data = json.loads(match.group())
+                except json.JSONDecodeError as e:
+                    logger.error("Plan JSON 解析失败，原文（前500字）：%s", text[:500])
+                    raise ValueError(
+                        f"Planner 响应不是合法 JSON（{e}），请检查模型输出格式"
+                    ) from e
+            else:
+                logger.error("Plan 响应中未找到 JSON 对象，原文（前500字）：%s", text[:500])
+                raise ValueError(
+                    f"Planner 响应中未找到 JSON 对象，原文：{text[:200]}"
+                )
         steps = [Step(**s) for s in data.get("steps", [])]
         return Plan(goal=data.get("goal", ""), thinking=thinking, steps=steps)
