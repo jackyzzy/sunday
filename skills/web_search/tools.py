@@ -8,12 +8,13 @@ logger = logging.getLogger(__name__)
 
 
 async def web_search(query: str, max_results: int = 5) -> str:
-    """使用 Tavily API 搜索关键词，返回标题 + 摘要列表。
+    """使用 Tavily API 搜索关键词，返回按发布日期降序排列的标题 + 摘要列表。
 
     需要环境变量 TAVILY_API_KEY。未配置时返回友好错误提示。
     """
     try:
         import os
+        from datetime import datetime
 
         api_key = os.environ.get("TAVILY_API_KEY", "")
         if not api_key:
@@ -41,12 +42,27 @@ async def web_search(query: str, max_results: int = 5) -> str:
         if not results:
             return f"未找到关于 '{query}' 的搜索结果"
 
+        def _parse_date(r):
+            raw = r.get("published_date") or ""
+            try:
+                return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                return None
+
+        def _sort_key(r):
+            d = _parse_date(r)
+            return (d is None, -d.timestamp() if d else 0)
+
+        sorted_results = sorted(results[:max_results], key=_sort_key)
+
         lines = []
-        for i, r in enumerate(results[:max_results], 1):
+        for i, r in enumerate(sorted_results, 1):
             title = r.get("title", "（无标题）")
             url = r.get("url", "")
             snippet = r.get("content", "")[:200].replace("\n", " ")
-            lines.append(f"{i}. **{title}**\n   {url}\n   {snippet}")
+            d = _parse_date(r)
+            date_label = f"  发布：{d.strftime('%Y-%m-%d')}" if d else ""
+            lines.append(f"{i}. **{title}**{date_label}\n   {url}\n   {snippet}")
 
         return "\n\n".join(lines)
 

@@ -186,3 +186,120 @@ async def test_fetch_url_returns_text():
         result = await fetch_url("https://example.com")
 
     assert "Hello World" in result
+
+
+async def test_web_search_includes_date():
+    """结果包含发布日期标注"""
+    import os
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "results": [
+            {
+                "title": "新闻标题",
+                "url": "https://example.com/news",
+                "content": "新闻摘要",
+                "published_date": "2025-11-03T00:00:00Z",
+            }
+        ]
+    }
+    mock_response.raise_for_status.return_value = None
+
+    with patch.dict(os.environ, {"TAVILY_API_KEY": "fake-key"}):
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+
+            from skills.web_search.tools import web_search
+
+            result = await web_search("新闻")
+
+    assert "发布：2025-11-03" in result
+
+
+async def test_web_search_sorted_by_date():
+    """多条结果按发布日期降序排列（最新在前）"""
+    import os
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "results": [
+            {
+                "title": "旧文章",
+                "url": "https://example.com/old",
+                "content": "旧内容",
+                "published_date": "2023-01-01T00:00:00Z",
+            },
+            {
+                "title": "新文章",
+                "url": "https://example.com/new",
+                "content": "新内容",
+                "published_date": "2025-11-03T00:00:00Z",
+            },
+        ]
+    }
+    mock_response.raise_for_status.return_value = None
+
+    with patch.dict(os.environ, {"TAVILY_API_KEY": "fake-key"}):
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+
+            from skills.web_search.tools import web_search
+
+            result = await web_search("文章")
+
+    assert "发布：2025-11-03" in result
+    assert "发布：2023-01-01" in result
+    new_pos = result.index("新文章")
+    old_pos = result.index("旧文章")
+    assert new_pos < old_pos, "最新文章应排在旧文章前面"
+
+
+async def test_web_search_no_date_last():
+    """无日期的结果排在有日期结果之后"""
+    import os
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "results": [
+            {
+                "title": "无日期文章",
+                "url": "https://example.com/no-date",
+                "content": "无日期内容",
+            },
+            {
+                "title": "有日期文章",
+                "url": "https://example.com/dated",
+                "content": "有日期内容",
+                "published_date": "2024-06-01T00:00:00Z",
+            },
+        ]
+    }
+    mock_response.raise_for_status.return_value = None
+
+    with patch.dict(os.environ, {"TAVILY_API_KEY": "fake-key"}):
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+
+            from skills.web_search.tools import web_search
+
+            result = await web_search("文章")
+
+    assert "发布：2024-06-01" in result
+    dated_pos = result.index("有日期文章")
+    no_date_pos = result.index("无日期文章")
+    assert dated_pos < no_date_pos, "有日期结果应排在无日期结果前面"
