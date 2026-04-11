@@ -21,6 +21,62 @@ logger = logging.getLogger(__name__)
 DEFAULT_GATEWAY_URL = "ws://localhost:7899"
 
 
+def _copy_to_clipboard(text: str) -> bool:
+    """将文本写入系统剪贴板，返回是否成功。
+
+    检测顺序：
+      1. clip.exe      — WSL2 / Windows 原生
+      2. pbcopy        — macOS
+      3. wl-copy       — Linux Wayland
+      4. xclip         — Linux X11
+      5. xsel          — Linux X11（备选）
+      6. pyperclip     — Python 跨平台库（需单独安装）
+    """
+    import shutil
+    import subprocess
+    import sys
+
+    def _run(cmd: list[str], input_bytes: bytes) -> bool:
+        try:
+            proc = subprocess.run(cmd, input=input_bytes, check=False,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return proc.returncode == 0
+        except OSError:
+            return False
+
+    encoded = text.encode("utf-8")
+
+    # WSL2 / Windows — clip.exe 要求 UTF-16-LE
+    if shutil.which("clip.exe"):
+        return _run(["clip.exe"], text.encode("utf-16-le"))
+
+    # macOS
+    if sys.platform == "darwin" and shutil.which("pbcopy"):
+        return _run(["pbcopy"], encoded)
+
+    # Linux Wayland
+    if shutil.which("wl-copy"):
+        return _run(["wl-copy"], encoded)
+
+    # Linux X11 — xclip
+    if shutil.which("xclip"):
+        return _run(["xclip", "-selection", "clipboard"], encoded)
+
+    # Linux X11 — xsel
+    if shutil.which("xsel"):
+        return _run(["xsel", "--clipboard", "--input"], encoded)
+
+    # Python 跨平台库兜底
+    try:
+        import pyperclip  # type: ignore
+        pyperclip.copy(text)
+        return True
+    except Exception:
+        pass
+
+    return False
+
+
 class SundayApp(App):
     """Sunday TUI — 5 区布局（Header / ChatLog / StatusBar / InfoBar / InputBar）。"""
 
@@ -31,6 +87,9 @@ class SundayApp(App):
         Binding("ctrl+l", "switch_model", "切换模型", show=False),
         Binding("ctrl+t", "toggle_thinking", "思考展开", show=False),
         Binding("ctrl+o", "toggle_tools", "工具卡片", show=False),
+        # ctrl+c 覆盖 Textual 默认的 quit；退出改用 ctrl+q
+        Binding("ctrl+c", "copy_chat", "复制对话", show=False),
+        Binding("ctrl+q", "quit", "退出", show=False),
         Binding("escape", "abort_task", "中止任务", show=False),
     ]
 
@@ -240,3 +299,17 @@ class SundayApp(App):
 
     async def action_toggle_tools(self) -> None:
         pass  # 工具卡片折叠在 Phase 5 TUI 内处理
+
+    async def action_copy_chat(self) -> None:
+        """Ctrl+C：将聊天内容复制到系统剪贴板（跨平台）。"""
+        text = self.query_one(ChatLog).get_plain_text()
+        if not text.strip():
+            self.query_one(ChatLog).add_system_message("（对话内容为空，无可复制）")
+            return
+
+        if _copy_to_clipboard(text):
+            self.query_one(ChatLog).add_system_message("✓ 对话已复制到剪贴板")
+        else:
+            self.query_one(ChatLog).add_system_message(
+                "剪贴板不可用（需要 clip.exe / pbcopy / wl-copy / xclip / xsel / pyperclip）"
+            )

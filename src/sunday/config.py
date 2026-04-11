@@ -89,7 +89,7 @@ class ToolsConfig(BaseModel):
     """工具执行配置"""
 
     default_timeout: int = 60
-    max_output_chars: int = 20480
+    max_output_chars: int = 8192
     sandbox_mode: bool = True
     allow_list: list[str] = Field(default_factory=list)
     deny_list: list[str] = Field(default_factory=lambda: ["rm -rf", "dd if="])

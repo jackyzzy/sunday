@@ -28,6 +28,17 @@ class ChatLog(Widget):
         """返回所有已渲染文本的拼接（用于测试断言）。"""
         return "\n".join(str(line) for line in self._log.lines)
 
+    def get_plain_text(self) -> str:
+        """返回去掉 Rich markup 的纯文本（用于复制到剪贴板）。"""
+        from rich.text import Text
+        lines = []
+        for line in self._log.lines:
+            if isinstance(line, Text):
+                lines.append(line.plain)
+            else:
+                lines.append(str(line))
+        return "\n".join(lines)
+
     def add_user_message(self, content: str) -> None:
         self._log.write(f"[bold cyan][用户][/bold cyan] {content}")
 
