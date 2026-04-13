@@ -78,9 +78,11 @@ class Executor:
 
     async def _run_inner(self, step: Step, state: AgentState) -> StepResult:
         """实际执行逻辑（由 run() 包裹以统一捕获网络异常）。"""
+        from sunday.agent.providers import get_provider
+
         model_cfg: ModelConfig = self.config.model
         max_steps = self.config.reasoning.max_react_iteration
-        api_key = model_cfg.get_api_key()
+        provider = get_provider(model_cfg.provider)
 
         system = self._get_system_prompt().format(
             intent=step.intent,
@@ -99,117 +101,66 @@ class Executor:
                     "role": "user",
                     "content": "你已用完工具调用次数。请根据以上收集到的信息，直接输出最终结果，不要再调用工具。",
                 })
-                response_data = await self._call_llm(system, messages, [], model_cfg, api_key)
-                output = self._extract_text(response_data)
+                response = await self._call_llm(system, messages, [], model_cfg)
                 logger.warning("步骤 %s 达到最大迭代次数 %d，已强制收尾输出", step.id, max_steps)
                 return StepResult(
                     step_id=step.id,
                     status=StepStatus.DONE,
-                    output=output,
+                    output=response.text,
                     react_iterations=iterations,
                 )
 
-            response_data = await self._call_llm(system, messages, tools, model_cfg, api_key)
-            finish_reason = response_data.get("stop_reason") or response_data.get(
-                "finish_reason", "stop"
-            )
+            response = await self._call_llm(system, messages, tools, model_cfg)
 
             # 模型判断任务完成
-            if finish_reason in ("stop", "end_turn") or not response_data.get("tool_calls"):
-                output = self._extract_text(response_data)
+            if response.finish_reason in ("stop", "end_turn") or not response.tool_call:
                 return StepResult(
                     step_id=step.id,
                     status=StepStatus.DONE,
-                    output=output,
+                    output=response.text,
                     react_iterations=iterations,
                 )
 
             # 有工具调用
-            tool_call = self._extract_tool_call(response_data)
-            if tool_call is None:
-                output = self._extract_text(response_data)
-                return StepResult(
-                    step_id=step.id,
-                    status=StepStatus.DONE,
-                    output=output,
-                    react_iterations=iterations,
-                )
-
-            tool_name, arguments_str, tool_call_id = tool_call
-            current_call = _LastToolCall(tool_name, arguments_str)
+            tc = response.tool_call
+            current_call = _LastToolCall(tc.name, tc.arguments)
             if current_call == last_tool_call:
-                raise RepetitionError(f"连续重复调用工具 {tool_name}，参数：{arguments_str}")
+                raise RepetitionError(f"连续重复调用工具 {tc.name}，参数：{tc.arguments}")
             last_tool_call = current_call
 
-            # 执行工具（arguments_str 可能为格式错误的 JSON，容错处理）
+            # 执行工具（arguments 可能为格式错误的 JSON，容错处理）
             try:
-                arguments = json.loads(arguments_str) if arguments_str else {}
+                arguments = json.loads(tc.arguments) if tc.arguments else {}
             except json.JSONDecodeError:
-                logger.warning("工具 %s 参数 JSON 解析失败，使用空参数。原文：%s", tool_name, arguments_str[:200])
+                logger.warning("工具 %s 参数 JSON 解析失败，使用空参数。原文：%s", tc.name, tc.arguments[:200])
                 arguments = {}
 
             if self.tool_registry:
                 observation = await self.tool_registry.execute(
-                    tool_name, arguments, state.session_id
+                    tc.name, arguments, state.session_id
                 )
             else:
-                observation = f"[工具 {tool_name} 不可用]"
+                observation = f"[工具 {tc.name} 不可用]"
 
             iterations.append(ReactIteration(
                 iteration=i,
-                tool_name=tool_name,
+                tool_name=tc.name,
                 tool_input=arguments,
                 observation=observation,
             ))
 
-            # 按 provider 使用正确的消息格式追加工具调用和结果
-            if model_cfg.provider == "anthropic":
-                messages.append({
-                    "role": "assistant",
-                    "content": response_data.get("content", []),
-                })
-                messages.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tool_call_id,
-                        "content": observation,
-                    }],
-                })
-            else:
-                # OpenAI 兼容（DeepSeek、Qwen 等）
-                # content 用 "" 而非 None：部分 provider（DeepSeek）拒绝 null content
-                messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "id": tool_call_id,
-                        "type": "function",
-                        "function": {"name": tool_name, "arguments": arguments_str},
-                    }],
-                })
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": observation,
-                })
+            # 委托 provider 构造正确的 tool result 消息格式
+            messages.extend(provider.build_tool_result_messages(response, observation))
 
     # ── 内部 LLM 调用（执行阶段 temperature=0） ────────────────────────────
 
     async def _call_llm(
-        self, system: str, messages: list, tools: list, model_cfg: "ModelConfig", api_key: str
-    ) -> dict:
+        self, system: str, messages: list, tools: list, model_cfg: "ModelConfig"
+    ):
+        from sunday.agent.providers.base import LLMResponse
         return await LLMClient.call(
-            model_cfg, api_key, messages,
+            model_cfg, messages,
             system=system,
             tools=tools or None,
             temperature=0,
         )
-
-    @staticmethod
-    def _extract_text(data: dict) -> str:
-        return LLMClient.extract_text(data)
-
-    @staticmethod
-    def _extract_tool_call(data: dict) -> tuple[str, str, str] | None:
-        return LLMClient.extract_tool_call(data)

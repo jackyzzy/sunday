@@ -8,11 +8,12 @@ from sunday.gateway.session import SessionManager
 
 
 async def test_new_session_returns_id(tmp_path):
-    """new_session 返回 12 位 hex 字符串"""
+    """new_session 返回标准 UUID 字符串（含连字符，36 位）"""
+    import uuid
     sm = SessionManager(tmp_path)
     sid = sm.new_session()
-    assert len(sid) == 12
-    assert all(c in "0123456789abcdef" for c in sid)
+    assert len(sid) == 36
+    uuid.UUID(sid)  # 合法 UUID 不抛异常
 
 
 async def test_new_session_creates_jsonl(tmp_path):

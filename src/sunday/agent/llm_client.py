@@ -1,16 +1,17 @@
-"""共享 LLM 调用客户端 — 消除 Planner/Executor/Verifier/MemoryManager 中的重复代码"""
+"""共享 LLM 调用客户端 — 通过 Provider 注册表分发，消除 provider if/else。"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import httpx
 
+from sunday.agent.providers.base import LLMResponse
+
 if TYPE_CHECKING:
     from sunday.config import ModelConfig
 
 # 模块级连接池：复用 AsyncClient，避免每次调用重建 TCP/TLS 连接
-# 延迟初始化，便于测试通过 patch("sunday.agent.llm_client._HTTP_CLIENT", mock) 替换
-# 不设 base_url，每次传入完整 URL；timeout=None 表示由各请求独立控制
+# 延迟初始化，便于测试通过 patch("sunday.agent.llm_client._get_http_client", ...) 替换
 _HTTP_CLIENT: httpx.AsyncClient | None = None
 
 
@@ -25,15 +26,14 @@ def _get_http_client() -> httpx.AsyncClient:
 
 
 class LLMClient:
-    """最小化 LLM 调用封装，支持 Anthropic 和 OpenAI 兼容接口。
+    """LLM 调用分发器，通过 Provider 注册表支持任意 provider。
 
-    各组件按需传入参数，不持有状态。
+    api_key 由 model_cfg.get_api_key() 内部获取，调用方无需手动传递。
     """
 
     @staticmethod
     async def call(
         model_cfg: "ModelConfig",
-        api_key: str,
         messages: list[dict],
         *,
         system: str = "",
@@ -42,38 +42,46 @@ class LLMClient:
         temperature: float = 0,
         thinking_budget: int = 0,
         timeout: float = 120,
-    ) -> dict:
-        """统一 LLM 调用接口，返回规范化 dict。
+    ) -> LLMResponse:
+        """统一 LLM 调用接口，返回规范化 LLMResponse。
 
-        返回 dict 结构：
-          - content: list[{"type": "text"/"tool_use", ...}]  (Anthropic 格式)
-          - stop_reason / finish_reason: str
-          - tool_calls: list[{"id", "name", "arguments"}] | None  (提取自 content)
+        LLMResponse 字段：
+          text:         模型输出文本（已剥离 thinking 标签）
+          thinking:     思考过程，可能为 None
+          tool_call:    工具调用（ToolCall），可能为 None
+          finish_reason: 结束原因
+          raw_content:  provider 原始 content（供 build_tool_result_messages 使用）
         """
-        if model_cfg.provider == "anthropic":
-            return await LLMClient._call_anthropic(
-                model_cfg, api_key, messages,
-                system=system, tools=tools,
-                max_tokens=max_tokens or model_cfg.max_tokens,
-                temperature=temperature,
-                thinking_budget=thinking_budget,
-                timeout=timeout,
-            )
-        elif model_cfg.provider == "openai":
-            return await LLMClient._call_openai(
-                model_cfg, api_key, messages,
-                system=system, tools=tools,
-                max_tokens=max_tokens or model_cfg.max_tokens,
-                temperature=temperature,
-                timeout=timeout,
-            )
-        else:
-            raise ValueError(f"不支持的 provider: {model_cfg.provider}")
+        import logging
+        from sunday.agent.providers import get_provider
+
+        _logger = logging.getLogger(__name__)
+        provider = get_provider(model_cfg.provider)
+        api_key = model_cfg.get_api_key()
+
+        # thinking_budget 仅对声明支持的 provider 生效，其余静默置零
+        effective_budget = thinking_budget if provider.supports_thinking() else 0
+
+        request = provider.build_request(
+            model_cfg, api_key, messages,
+            system=system,
+            tools=tools,
+            max_tokens=max_tokens or model_cfg.max_tokens,
+            temperature=temperature,
+            thinking_budget=effective_budget,
+        )
+
+        resp = await _get_http_client().post(
+            request.url, headers=request.headers, json=request.body, timeout=timeout
+        )
+        if not resp.is_success:
+            _logger.error("LLM API %d 错误，响应体：%s", resp.status_code, resp.text[:500])
+        resp.raise_for_status()
+        return provider.parse_response(resp.json())
 
     @staticmethod
     async def call_text(
         model_cfg: "ModelConfig",
-        api_key: str,
         prompt: str,
         *,
         max_tokens: int = 1024,
@@ -81,172 +89,11 @@ class LLMClient:
         timeout: float = 60,
     ) -> str:
         """简化接口：单轮文本请求，直接返回字符串。"""
-        messages = [{"role": "user", "content": prompt}]
         result = await LLMClient.call(
-            model_cfg, api_key, messages,
+            model_cfg,
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             temperature=temperature,
             timeout=timeout,
         )
-        return LLMClient.extract_text(result)
-
-    @staticmethod
-    def extract_text(data: dict) -> str:
-        """从规范化返回 dict 中提取文本内容。"""
-        for block in data.get("content", []):
-            if isinstance(block, dict) and block.get("type") == "text":
-                return block.get("text", "")
-        return ""
-
-    @staticmethod
-    def split_thinking(raw: str) -> tuple[str | None, str]:
-        """剥离 thinking 标签，返回 (thinking, rest)。
-
-        支持：
-          - Anthropic extended thinking: <thinking>...</thinking>
-          - DeepSeek / 通用 chain-of-thought: <think>...</think>
-        """
-        for open_tag, close_tag in [("<thinking>", "</thinking>"), ("<think>", "</think>")]:
-            if open_tag in raw and close_tag in raw:
-                start = raw.index(open_tag) + len(open_tag)
-                end = raw.index(close_tag)
-                thinking = raw[start:end].strip()
-                rest = raw[raw.index(close_tag) + len(close_tag):].strip()
-                return thinking, rest
-        return None, raw
-
-    @staticmethod
-    def extract_tool_call(data: dict) -> tuple[str, str, str] | None:
-        """从规范化返回 dict 中提取工具调用。返回 (name, arguments_str, id) 或 None。"""
-        tool_calls = data.get("tool_calls")
-        if not tool_calls:
-            return None
-        tc = tool_calls[0]
-        return tc.get("name", ""), tc.get("arguments", "{}"), tc.get("id", "call_0")
-
-    # ── 内部实现 ──────────────────────────────────────────────────────────
-
-    @staticmethod
-    async def _call_anthropic(
-        model_cfg: "ModelConfig", api_key: str, messages: list[dict], *,
-        system: str, tools: list[dict] | None, max_tokens: int,
-        temperature: float, thinking_budget: int, timeout: float,
-    ) -> dict:
-        import json
-
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        body: dict = {
-            "model": model_cfg.id,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": messages,
-        }
-        if system:
-            body["system"] = system
-        if tools:
-            body["tools"] = tools
-        if thinking_budget > 0:
-            body["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
-
-        resp = await _get_http_client().post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers, json=body, timeout=timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        # 提取工具调用到统一格式
-        tool_use_blocks = [b for b in data.get("content", []) if b.get("type") == "tool_use"]
-        if tool_use_blocks:
-            tb = tool_use_blocks[0]
-            data["tool_calls"] = [{
-                "id": tb["id"],
-                "name": tb["name"],
-                "arguments": json.dumps(tb.get("input", {}), ensure_ascii=False),
-            }]
-
-        # 提取 thinking 块（供 Planner 使用）
-        thinking_blocks = [b for b in data.get("content", []) if b.get("type") == "thinking"]
-        if thinking_blocks:
-            data["thinking"] = thinking_blocks[0].get("thinking", "")
-        else:
-            # 处理文本块中内嵌的 <think> 标签（部分 Anthropic 兼容模型）
-            for block in data.get("content", []):
-                if block.get("type") == "text":
-                    text = block.get("text", "")
-                    thinking, rest = LLMClient.split_thinking(text)
-                    if thinking is not None:
-                        block["text"] = rest
-                        data["thinking"] = thinking
-                    break
-
-        return data
-
-    @staticmethod
-    async def _call_openai(
-        model_cfg: "ModelConfig", api_key: str, messages: list[dict], *,
-        system: str, tools: list[dict] | None, max_tokens: int,
-        temperature: float, timeout: float,
-    ) -> dict:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        full_messages = ([{"role": "system", "content": system}] if system else []) + messages
-        body: dict = {
-            "model": model_cfg.id,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": full_messages,
-        }
-        if tools:
-            body["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t["description"],
-                        "parameters": t.get("input_schema", {}),
-                    },
-                }
-                for t in tools
-            ]
-
-        base = (model_cfg.base_url or "https://api.openai.com/v1").rstrip("/")
-        resp = await _get_http_client().post(
-            f"{base}/chat/completions", headers=headers, json=body, timeout=timeout,
-        )
-        if not resp.is_success:
-            import logging
-            logging.getLogger(__name__).error(
-                "LLM API %d 错误，响应体：%s", resp.status_code, resp.text[:500]
-            )
-        resp.raise_for_status()
-        data = resp.json()
-
-        # 规范化为统一格式
-        choice = data["choices"][0]
-        msg = choice["message"]
-        raw_text = msg.get("content") or ""
-
-        # 剥离 DeepSeek / 通用 chain-of-thought 标签（复用 split_thinking）
-        thinking, raw_text = LLMClient.split_thinking(raw_text)
-
-        result: dict = {
-            "finish_reason": choice["finish_reason"],
-            "content": [{"type": "text", "text": raw_text}],
-        }
-        if thinking:
-            result["thinking"] = thinking
-        if msg.get("tool_calls"):
-            tc = msg["tool_calls"][0]
-            result["tool_calls"] = [{
-                "id": tc.get("id", "call_0"),
-                "name": tc["function"]["name"],
-                "arguments": tc["function"].get("arguments", "{}"),
-            }]
-        return result
+        return result.text

@@ -315,15 +315,27 @@ class SundayApp(App):
         pass  # 工具卡片折叠在 Phase 5 TUI 内处理
 
     async def action_copy_chat(self) -> None:
-        """Ctrl+C：将聊天内容复制到系统剪贴板（跨平台）。"""
-        text = self.query_one(ChatLog).get_plain_text()
+        """Ctrl+C：将聊天内容复制到系统剪贴板（跨平台）。
+
+        若存在鼠标拖拽选区则只复制选中行，否则复制全部对话。
+        """
+        chat = self.query_one(ChatLog)
+        selected = chat.get_selected_text()
+        if selected:
+            text = selected
+            success_msg = "✓ 已复制选中内容到剪贴板"
+        else:
+            text = chat.get_plain_text()
+            success_msg = "✓ 对话已复制到剪贴板"
+
         if not text.strip():
-            self.query_one(ChatLog).add_system_message("（对话内容为空，无可复制）")
+            chat.add_system_message("（内容为空，无可复制）")
             return
 
         if _copy_to_clipboard(text):
-            self.query_one(ChatLog).add_system_message("✓ 对话已复制到剪贴板")
+            chat.add_system_message(success_msg)
+            chat.clear_selection()
         else:
-            self.query_one(ChatLog).add_system_message(
+            chat.add_system_message(
                 "剪贴板不可用（需要 clip.exe / pbcopy / wl-copy / xclip / xsel / pyperclip）"
             )

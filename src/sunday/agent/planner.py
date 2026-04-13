@@ -46,8 +46,6 @@ class Planner:
     async def think_and_plan(self, state: AgentState, plan_prompt: str | None = None) -> Plan:
         """根据任务和上下文生成结构化 Plan。"""
         model_cfg: ModelConfig = self.config.model
-        api_key = model_cfg.get_api_key()
-
         budget = THINKING_BUDGET.get(state.thinking_level, 4096)
 
         task_context = f"{self.system_prompt}\n\n---\n\n" if self.system_prompt else ""
@@ -64,24 +62,21 @@ class Planner:
         active_prompt = plan_prompt if plan_prompt is not None else self._get_plan_prompt()
         prompt = task_context + history_context + active_prompt.format(task=state.task)
 
-        messages = [{"role": "user", "content": prompt}]
-        data = await LLMClient.call(
-            model_cfg, api_key, messages,
+        response = await LLMClient.call(
+            model_cfg,
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=model_cfg.max_tokens,
             temperature=0.3,
             thinking_budget=budget,
         )
 
-        thinking_text = data.get("thinking")
-        plan_text = LLMClient.extract_text(data)
-        plan = self._parse_plan(plan_text, thinking=thinking_text)
+        plan = self._parse_plan(response.text, thinking=response.thinking)
         logger.info("规划完成，共 %d 个步骤", len(plan.steps))
         return plan
 
     async def replan(self, failed_step: Step, result_output: str, state: AgentState) -> list[Step]:
         """局部重规划：替换 failed_step 之后所有未执行步骤。"""
         model_cfg: ModelConfig = self.config.model
-        api_key = model_cfg.get_api_key()
 
         completed = [tr for tr in state.team_results if tr.passed]
         completed_summary = "; ".join(f"{tr.step_id}: {tr.output[:150]}" for tr in completed)
@@ -103,7 +98,7 @@ class Planner:
         )
 
         raw = await LLMClient.call_text(
-            model_cfg, api_key, prompt, max_tokens=4096, temperature=0.3
+            model_cfg, prompt, max_tokens=4096, temperature=0.3
         )
         plan_text = strip_code_fence(raw)
         if not plan_text:
@@ -128,7 +123,6 @@ class Planner:
         使用独立的 sub_replan.md prompt，从 sub_state.step_results 取已完成子步骤摘要。
         """
         model_cfg: ModelConfig = self.config.model
-        api_key = model_cfg.get_api_key()
 
         # 从子状态取已完成子步骤摘要
         completed = [r for r in sub_state.step_results if r.verified]
@@ -155,7 +149,7 @@ class Planner:
         )
 
         raw = await LLMClient.call_text(
-            model_cfg, api_key, prompt, max_tokens=4096, temperature=0.3
+            model_cfg, prompt, max_tokens=4096, temperature=0.3
         )
         plan_text = strip_code_fence(raw)
         if not plan_text:

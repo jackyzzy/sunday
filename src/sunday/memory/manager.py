@@ -183,7 +183,6 @@ class MemoryManager:
             from sunday.agent.llm_client import LLMClient
 
             model_cfg = self.config.model
-            api_key = model_cfg.get_api_key()
 
             steps_summary = "\n".join(
                 f"- {r.step_id}: {r.output[:300]}"
@@ -194,7 +193,7 @@ class MemoryManager:
                 steps_summary=steps_summary or "无",
             )
 
-            raw = await LLMClient.call_text(model_cfg, api_key, prompt, max_tokens=2048, timeout=60)
+            raw = await LLMClient.call_text(model_cfg, prompt, max_tokens=2048, timeout=60)
             data = self._parse_json_safe(raw)
             if data is None:
                 return

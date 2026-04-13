@@ -28,95 +28,31 @@ class SimpleAgent:
         self.model_override = model_override
 
     async def run(self, task: str) -> str:
+        from sunday.agent.llm_client import LLMClient
+        from sunday.agent.models import THINKING_BUDGET
+
         config = self.settings.sunday
         model_cfg = config.model
 
-        # 解析 model_override（格式：provider/model-id）
-        provider = model_cfg.provider
-        model_id = model_cfg.id
+        # 解析 model_override（格式：provider/model-id），与 gateway/server.py 保持一致
         if self.model_override:
             parts = self.model_override.split("/", 1)
-            if len(parts) == 2:
-                provider, model_id = parts
-            else:
-                model_id = parts[0]
+            model_cfg = model_cfg.model_copy(
+                update={"provider": parts[0], "id": parts[1]} if len(parts) == 2
+                else {"id": parts[0]}
+            )
 
-        api_key = self.settings.get_api_key(provider, model_cfg.api_key_env)
-
-        if provider == "anthropic":
-            return await self._run_anthropic(task, model_id, api_key, model_cfg)
-        elif provider == "openai":
-            return await self._run_openai(task, model_id, api_key, model_cfg)
-        else:
-            raise ValueError(f"Phase 1 暂不支持 provider: {provider}，请使用 anthropic 或 openai")
-
-    async def _run_anthropic(self, task, model_id, api_key, cfg) -> str:
-        import httpx
-
-        system_prompt = self._build_system_prompt()
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        body = {
-            "model": model_id,
-            "max_tokens": cfg.max_tokens,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": task}],
-        }
-
-        # 扩展思考
-        from sunday.agent.models import THINKING_BUDGET
         budget = THINKING_BUDGET.get(self.thinking_level, 4096)
-        if budget > 0:
-            body["thinking"] = {"type": "enabled", "budget_tokens": budget}
 
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=body,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        # 提取文本内容（跳过 thinking block）
-        texts = [
-            block["text"]
-            for block in data.get("content", [])
-            if block.get("type") == "text"
-        ]
-        return "\n".join(texts)
-
-    async def _run_openai(self, task, model_id, api_key, cfg) -> str:
-        import httpx
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": model_id,
-            "max_tokens": cfg.max_tokens,
-            "temperature": cfg.temperature,
-            "messages": [
-                {"role": "system", "content": self._build_system_prompt()},
-                {"role": "user", "content": task},
-            ],
-        }
-
-        base = (cfg.base_url or "https://api.openai.com/v1").rstrip("/")
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                f"{base}/chat/completions",
-                headers=headers,
-                json=body,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        return data["choices"][0]["message"]["content"]
+        result = await LLMClient.call(
+            model_cfg,
+            [{"role": "user", "content": task}],
+            system=self._build_system_prompt(),
+            max_tokens=model_cfg.max_tokens,
+            thinking_budget=budget,
+            timeout=120,
+        )
+        return result.text
 
     def _build_system_prompt(self) -> str:
         from datetime import date

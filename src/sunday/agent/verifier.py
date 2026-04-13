@@ -49,7 +49,6 @@ class Verifier:
             return VerifyResult(passed=True, reason="无成功标准，默认通过")
 
         model_cfg: ModelConfig = self.config.model
-        api_key = model_cfg.get_api_key()
 
         prompt = self._get_verify_prompt().format(
             intent=step.intent,
@@ -58,7 +57,7 @@ class Verifier:
         )
 
         try:
-            raw = await self._call_llm(prompt, model_cfg, api_key)
+            raw = await self._call_llm(prompt, model_cfg)
             return self._parse_verify_result(raw)
         except Exception as e:
             logger.warning("check LLM 调用失败（%s），默认通过", e)
@@ -72,7 +71,6 @@ class Verifier:
     ) -> str:
         """顶层评估：基于所有 Team 结果生成整体任务摘要。"""
         model_cfg: ModelConfig = self.config.model
-        api_key = model_cfg.get_api_key()
 
         results_summary = "\n".join(
             f"- {tr.step_id} ({'✓' if tr.passed else '✗'}): {tr.output[:300]}"
@@ -89,7 +87,7 @@ class Verifier:
             written_files=files_text,
         )
         try:
-            return await self._call_llm(prompt, model_cfg, api_key)
+            return await self._call_llm(prompt, model_cfg)
         except Exception as e:
             logger.warning("evaluate LLM 调用失败（%s），使用本地摘要降级", e)
             passed = sum(1 for tr in team_results if tr.passed)
@@ -101,8 +99,8 @@ class Verifier:
 
     # ── 内部 LLM 调用（验证阶段 temperature=0） ───────────────────────────
 
-    async def _call_llm(self, prompt: str, model_cfg: "ModelConfig", api_key: str) -> str:
-        return await LLMClient.call_text(model_cfg, api_key, prompt, max_tokens=1024, timeout=60)
+    async def _call_llm(self, prompt: str, model_cfg: "ModelConfig") -> str:
+        return await LLMClient.call_text(model_cfg, prompt, max_tokens=1024, timeout=60)
 
     @staticmethod
     def _parse_verify_result(raw: str) -> VerifyResult:
