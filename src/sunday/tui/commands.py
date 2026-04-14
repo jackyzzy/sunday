@@ -21,6 +21,7 @@ Sunday Slash 命令：
   /memory [file]    查看记忆文件 (SOUL/MEMORY/USER/TOOLS)
   /skills           列出可用技能
   /history          查看当前会话历史
+  /delete <id>      删除指定会话（清除日志与报告，不可恢复）
   /trust            启用信任模式，危险操作自动确认（当前会话有效）
   /help             显示此帮助
 """
@@ -67,6 +68,8 @@ class SlashCommandHandler:
             return await self._cmd_skills()
         if cmd == "history":
             return await self._cmd_history()
+        if cmd == "delete":
+            return await self._cmd_delete(args)
         if cmd == "trust":
             return await self._cmd_trust()
         if cmd == "help":
@@ -142,6 +145,16 @@ class SlashCommandHandler:
         from sunday.gateway.protocol import EventType, Message
         msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
                       data={"command": "history", "args": ""})
+        await self._ws.send(msg.to_json())
+        return None  # 结果由 Gateway 推回
+
+    async def _cmd_delete(self, args: str) -> str | None:
+        if not args:
+            return "[错误] 请指定要删除的 session ID，用法：/delete <session_id>"
+        from sunday.gateway.protocol import EventType, Message
+        normalized = args.strip().replace("_", "-")
+        msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
+                      data={"command": "delete", "args": normalized})
         await self._ws.send(msg.to_json())
         return None  # 结果由 Gateway 推回
 

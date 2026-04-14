@@ -250,6 +250,12 @@ class SundayApp(App):
                 skills = payload.get("skills", [])
                 lines = "\n".join(f"  · {s}" for s in skills) or "  （无可用技能）"
                 chat.add_system_message(f"可用技能：\n{lines}")
+            elif cmd == "delete":
+                deleted_id = payload.get("deleted_id", "")
+                msg = payload.get("message", f"会话已删除：{deleted_id}")
+                if deleted_id and deleted_id == self.session_id:
+                    msg += "\n提示：当前会话已被删除，建议使用 /new 创建新会话"
+                chat.add_system_message(msg)
             elif msg_text := payload.get("message"):
                 # 通用兜底：trust / reset / history / 未知命令
                 chat.add_system_message(msg_text)

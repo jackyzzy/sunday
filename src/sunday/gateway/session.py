@@ -59,6 +59,15 @@ class SessionManager:
         path.write_text((first + "\n") if first else "", encoding="utf-8")
         logger.debug("会话已重置：%s", session_id)
 
+    def delete_session(self, session_id: str) -> None:
+        """删除 session JSONL 文件及 index 中的条目。"""
+        path = self._dir / f"{session_id}.jsonl"
+        if path.exists():
+            path.unlink()
+        self._index = [e for e in self._index if e["session_id"] != session_id]
+        self._write_index()
+        logger.debug("会话已删除：%s", session_id)
+
     async def append(self, session_id: str, event_type: "EventType", data: dict) -> None:
         """追加事件到会话 JSONL 文件。"""
         now = datetime.now(timezone.utc).isoformat()

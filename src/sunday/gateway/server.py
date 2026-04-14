@@ -207,6 +207,32 @@ class Gateway:
                 "command": "reset",
                 "message": "会话上下文已清空。",
             })
+        elif command == "delete":
+            target_id = (data.get("args") or "").strip()
+            if not target_id:
+                await self.emit(session_id, EventType.SLASH_RESULT, {
+                    "command": "delete",
+                    "message": "[错误] 请指定要删除的 session ID，用法：/delete <session_id>",
+                })
+                return
+            # 1. 删除 session 文件 + index
+            self._session_mgr.delete_session(target_id)
+            # 2. 删除 log 文件
+            log_file = self._settings.sunday.agent.log_dir / f"{target_id}.jsonl"
+            if log_file.exists():
+                log_file.unlink()
+            # 3. 删除匹配前缀的 report 目录
+            import shutil
+            report_dir = self._settings.sunday.agent.report_dir
+            prefix = target_id[:6]
+            for d in report_dir.glob(f"*_{prefix}"):
+                if d.is_dir():
+                    shutil.rmtree(d)
+            await self.emit(session_id, EventType.SLASH_RESULT, {
+                "command": "delete",
+                "deleted_id": target_id,
+                "message": f"会话已删除：{target_id}",
+            })
         elif command == "memory":
             file_key = data.get("args", "MEMORY").upper()
             _FILE_MAP = {
