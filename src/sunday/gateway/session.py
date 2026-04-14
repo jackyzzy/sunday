@@ -72,10 +72,12 @@ class SessionManager:
         async with self._lock:
             with path.open("a", encoding="utf-8") as f:
                 f.write(entry + "\n")
-            # 更新 last_active
+            # 更新 last_active，首条 send 事件同时写入 title
             for meta in self._index:
                 if meta["session_id"] == session_id:
                     meta["last_active"] = now
+                    if event_type.value == "send" and data.get("content") and not meta.get("title"):
+                        meta["title"] = data["content"][:40].replace("\n", " ")
                     break
             self._write_index()
 
@@ -111,6 +113,33 @@ class SessionManager:
                 except Exception:
                     ts = ""
                 indexed[sid] = {"session_id": sid, "last_active": ts, "created_at": ts}
+        # 为历史 session 回填 title（兼容 index 中无 title 字段的旧记录）
+        index_dirty = False
+        for path in self._dir.glob("*.jsonl"):
+            sid = path.stem
+            if sid == "index":
+                continue
+            meta = indexed.get(sid)
+            if meta is None or meta.get("title"):
+                continue
+            try:
+                for ln in path.read_text(encoding="utf-8").splitlines():
+                    try:
+                        ev = json.loads(ln)
+                    except json.JSONDecodeError:
+                        continue
+                    if ev.get("type") == "send":
+                        content = ev.get("data", {}).get("content", "")
+                        if content:
+                            meta["title"] = content[:40].replace("\n", " ")
+                            index_dirty = True
+                        break
+            except Exception:
+                pass
+        if index_dirty:
+            self._index = list(indexed.values())
+            self._write_index()
+
         return sorted(indexed.values(), key=lambda s: s.get("last_active", ""), reverse=True)
 
     # ── 私有方法 ──────────────────────────────────────────────────────────

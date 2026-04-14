@@ -234,7 +234,11 @@ class SundayApp(App):
             elif cmd == "sessions":
                 sessions = payload.get("sessions", [])
                 lines = "\n".join(
-                    f"  {s['session_id']} （{s.get('last_active', '')[:10]}）"
+                    "  {sid}  （{date}）  {title}".format(
+                        sid=s["session_id"],
+                        date=s.get("last_active", "")[:10],
+                        title=s.get("title", "（无记录）"),
+                    )
                     for s in sessions
                 )
                 chat.add_system_message(f"会话列表：\n{lines or '  （无）'}")
