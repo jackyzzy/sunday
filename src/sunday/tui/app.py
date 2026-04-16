@@ -77,6 +77,64 @@ def _copy_to_clipboard(text: str) -> bool:
     return False
 
 
+def _promote_selection_to_clipboard() -> bool:
+    """将终端 PRIMARY 选区提升到 CLIPBOARD（仅 Linux X11/Wayland 需要）。
+
+    - WSL/Windows Terminal：鼠标松开时已自动写入 Windows 剪贴板，无需操作
+    - macOS：终端松开时已写入剪贴板，无需操作
+    - Linux X11：拖拽选区进入 PRIMARY，需手动提升到 CLIPBOARD
+    - Linux Wayland：同 X11，使用 wl-paste/wl-copy
+    返回 True 表示有选区内容被提升（或平台已自动处理），False 表示无选区或工具缺失。
+    """
+    import shutil
+    import subprocess
+    import sys
+
+    # WSL2 / Windows：终端已自动处理
+    if shutil.which("clip.exe"):
+        return True
+
+    # macOS：终端已自动处理
+    if sys.platform == "darwin":
+        return True
+
+    def _run(cmd: list[str], input_text: str | None = None) -> tuple[int, str]:
+        try:
+            r = subprocess.run(
+                cmd,
+                input=input_text,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            return r.returncode, r.stdout
+        except Exception:
+            return 1, ""
+
+    # Linux X11 — xclip
+    if shutil.which("xclip"):
+        code, text = _run(["xclip", "-o", "-selection", "primary"])
+        if code == 0 and text.strip():
+            _run(["xclip", "-i", "-selection", "clipboard"], text)
+            return True
+
+    # Linux X11 — xsel（备选）
+    if shutil.which("xsel"):
+        code, text = _run(["xsel", "-o", "--primary"])
+        if code == 0 and text.strip():
+            _run(["xsel", "-i", "--clipboard"], text)
+            return True
+
+    # Linux Wayland
+    if shutil.which("wl-paste") and shutil.which("wl-copy"):
+        code, text = _run(["wl-paste", "--primary"])
+        if code == 0 and text.strip():
+            _run(["wl-copy"], text)
+            return True
+
+    return False
+
+
 class SundayApp(App):
     """Sunday TUI — 5 区布局（Header / ChatLog / StatusBar / InfoBar / InputBar）。"""
 
@@ -89,6 +147,7 @@ class SundayApp(App):
         Binding("ctrl+o", "toggle_tools", "工具卡片", show=False),
         # ctrl+c 覆盖 Textual 默认的 quit；退出改用 ctrl+q
         Binding("ctrl+c", "copy_chat", "复制对话", show=False),
+        Binding("ctrl+y", "toggle_copy_mode", "复制模式", show=False),
         Binding("ctrl+q", "quit", "退出", show=False),
         Binding("escape", "abort_task", "中止任务", show=False),
     ]
@@ -112,6 +171,8 @@ class SundayApp(App):
         self._slash_handler: SlashCommandHandler | None = None
         # 等待确认的 Future
         self._pending_confirm: asyncio.Future | None = None
+        # 复制模式：禁用 Textual 鼠标捕获，让终端处理原生文本选择
+        self._copy_mode: bool = False
 
     # ── 布局 ──────────────────────────────────────────────────────────────
 
@@ -305,7 +366,81 @@ class SundayApp(App):
 
     # ── 快捷键 Action ─────────────────────────────────────────────────────
 
+    # ── 鼠标捕获切换（跨平台：WSL / Linux / macOS / Windows Terminal）────────
+
+    def _set_terminal_mouse(self, enabled: bool) -> None:
+        """通过写入 xterm 鼠标序列，启用或禁用终端鼠标事件报告。
+
+        使用 Textual driver 的输出通道（而非直接写 sys.stdout），避免
+        与 Textual 渲染缓冲区冲突。所有现代终端（Windows Terminal、
+        iTerm2、GNOME Terminal、Alacritty 等）均支持这些序列。
+        """
+        try:
+            driver = getattr(self, "_driver", None)
+            if driver is None:
+                return
+            if enabled:
+                # 恢复 Textual 默认开启的四条鼠标模式
+                driver.write("\x1b[?1000h\x1b[?1003h\x1b[?1015h\x1b[?1006h")
+            else:
+                # 关闭所有鼠标事件报告，终端接管鼠标（原生选中、右键菜单）
+                driver.write("\x1b[?1000l\x1b[?1003l\x1b[?1015l\x1b[?1006l")
+            if hasattr(driver, "flush"):
+                driver.flush()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _copy_mode_hint() -> str:
+        """根据当前平台返回复制快捷键提示（显示在状态栏）。"""
+        import shutil
+        import sys
+        if shutil.which("clip.exe"):
+            # WSL / Windows Terminal：右键直接复制已选文字（无菜单）
+            return "拖拽选中 | 右键 或 Ctrl+Shift+C 复制 | Ctrl+C 退出"
+        if sys.platform == "darwin":
+            return "拖拽选中 | Cmd+C 复制 | Ctrl+C 退出"
+        return "拖拽选中 | Ctrl+Shift+C 复制 | Ctrl+C 退出"
+
+    async def action_toggle_copy_mode(self) -> None:
+        """Ctrl+Y / /copy：切换复制模式。
+
+        进入后 Textual 停止捕获鼠标事件，终端接管：
+        - 拖拽可看到原生高亮选中
+        - WSL/Windows：右键 或 Ctrl+Shift+C 复制；松开鼠标时已自动入剪贴板
+        - Linux：Ctrl+Shift+C 复制到剪贴板
+        - macOS：Cmd+C 复制
+        - 或直接按 Ctrl+C：自动将选区提升到剪贴板（Linux X11/Wayland）后退出
+        进入时焦点转到 ChatLog 以支持键盘滚动（↑/↓/PgUp/PgDn）；
+        退出时焦点还给输入框。
+        """
+        self._copy_mode = not self._copy_mode
+        self._set_terminal_mouse(enabled=not self._copy_mode)
+        try:
+            self.query_one(StatusBar).set_copy_mode(
+                self._copy_mode, self._copy_mode_hint()
+            )
+        except Exception:
+            pass
+        if self._copy_mode:
+            # 进入复制模式：聚焦 ChatLog，允许键盘滚动（鼠标滚轮已不可用）
+            try:
+                self.query_one(ChatLog).focus()
+            except Exception:
+                pass
+        else:
+            # 退出复制模式：强制将焦点还给输入框
+            try:
+                from textual.widgets import Input
+                self.query_one("#main-input", Input).focus()
+            except Exception:
+                pass
+
     async def action_abort_task(self) -> None:
+        # Esc 优先退出复制模式
+        if self._copy_mode:
+            await self.action_toggle_copy_mode()
+            return
         if self._ws:
             msg = Message(type=EventType.ABORT, session_id=self.session_id)
             await self._ws.send(msg.to_json())
@@ -325,26 +460,28 @@ class SundayApp(App):
         pass  # 工具卡片折叠在 Phase 5 TUI 内处理
 
     async def action_copy_chat(self) -> None:
-        """Ctrl+C：将聊天内容复制到系统剪贴板（跨平台）。
+        """Ctrl+C：复制对话或退出复制模式。
 
-        若存在鼠标拖拽选区则只复制选中行，否则复制全部对话。
+        - 复制模式中：将终端 PRIMARY 选区提升到 CLIPBOARD（Linux X11/Wayland），
+          然后退出复制模式并还给输入框焦点。
+          WSL/macOS 终端松开鼠标时已自动写入剪贴板，无需额外操作。
+        - 普通模式：将全部对话内容复制到系统剪贴板。
         """
-        chat = self.query_one(ChatLog)
-        selected = chat.get_selected_text()
-        if selected:
-            text = selected
-            success_msg = "✓ 已复制选中内容到剪贴板"
-        else:
-            text = chat.get_plain_text()
-            success_msg = "✓ 对话已复制到剪贴板"
+        if self._copy_mode:
+            # 复制模式：提升选区 + 退出
+            _promote_selection_to_clipboard()
+            await self.action_toggle_copy_mode()
+            return
 
+        # 普通模式：复制全部对话
+        chat = self.query_one(ChatLog)
+        text = chat.get_plain_text()
         if not text.strip():
-            chat.add_system_message("（内容为空，无可复制）")
+            chat.add_system_message("（对话内容为空，无可复制）")
             return
 
         if _copy_to_clipboard(text):
-            chat.add_system_message(success_msg)
-            chat.clear_selection()
+            chat.add_system_message("✓ 对话已复制到剪贴板")
         else:
             chat.add_system_message(
                 "剪贴板不可用（需要 clip.exe / pbcopy / wl-copy / xclip / xsel / pyperclip）"

@@ -1,62 +1,9 @@
 """ChatLog — 聊天消息渲染组件"""
 from __future__ import annotations
 
-from textual import events
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import RichLog
-
-
-class SelectableRichLog(RichLog):
-    """支持鼠标拖拽选行的 RichLog 子类（行级别粒度）。"""
-
-    _sel_start: int | None = None
-    _sel_end: int | None = None
-    _selecting: bool = False
-
-    def on_mouse_down(self, event: events.MouseDown) -> None:
-        line_idx = max(0, int(round(event.y + self.scroll_y)))
-        self._sel_start = line_idx
-        self._sel_end = None
-        self._selecting = True
-
-    def on_mouse_move(self, event: events.MouseMove) -> None:
-        if self._selecting:
-            self._sel_end = max(0, int(round(event.y + self.scroll_y)))
-
-    def on_mouse_up(self, event: events.MouseUp) -> None:
-        if self._selecting:
-            self._sel_end = max(0, int(round(event.y + self.scroll_y)))
-            self._selecting = False
-
-    def on_leave(self, event: events.Leave) -> None:
-        self._selecting = False
-
-    def get_selected_text(self) -> str | None:
-        """返回选中行的纯文本；单击（start==end）或无选区返回 None。"""
-        if self._sel_start is None or self._sel_end is None:
-            return None
-        from rich.text import Text
-        start = min(self._sel_start, self._sel_end)
-        end = max(self._sel_start, self._sel_end)
-        if start == end:
-            return None
-        lines_text = []
-        for i, line in enumerate(self.lines):
-            if start <= i <= end:
-                lines_text.append(line.plain if isinstance(line, Text) else str(line))
-        return "\n".join(lines_text) if lines_text else None
-
-    def selected_line_count(self) -> int:
-        """返回选中的视觉行数，无选区时返回 0。"""
-        if self._sel_start is None or self._sel_end is None:
-            return 0
-        return abs(self._sel_end - self._sel_start) + 1
-
-    def clear_selection(self) -> None:
-        self._sel_start = None
-        self._sel_end = None
-        self._selecting = False
 
 
 class ChatLog(Widget):
@@ -70,19 +17,11 @@ class ChatLog(Widget):
     """
 
     def compose(self) -> ComposeResult:
-        yield SelectableRichLog(id="chat-rich-log", wrap=True, markup=True, highlight=False)
+        yield RichLog(id="chat-rich-log", wrap=True, markup=True, highlight=False)
 
     @property
-    def _log(self) -> SelectableRichLog:
-        return self.query_one(SelectableRichLog)
-
-    def get_selected_text(self) -> str | None:
-        """返回鼠标选中的纯文本，无选区时返回 None。"""
-        return self._log.get_selected_text()
-
-    def clear_selection(self) -> None:
-        """清除鼠标选区状态。"""
-        self._log.clear_selection()
+    def _log(self) -> RichLog:
+        return self.query_one(RichLog)
 
     @property
     def renderable_text(self) -> str:

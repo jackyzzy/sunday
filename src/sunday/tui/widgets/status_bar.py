@@ -46,3 +46,12 @@ class StatusBar(Widget):
 
     def set_error(self, msg: str = "") -> None:
         self.status_text = f"● 错误 {msg}".strip()
+
+    def set_copy_mode(self, active: bool, hint: str = "") -> None:
+        """切换复制模式状态栏显示。退出时恢复进入前的状态，而非强制写"就绪"。"""
+        if active:
+            self._prev_status = self.status_text
+            self.status_text = f"[COPY] {hint}" if hint else "[COPY] 拖拽选中 | Ctrl+C 退出"
+        else:
+            self.status_text = getattr(self, "_prev_status", "● 就绪") or "● 就绪"
+            self._prev_status = None

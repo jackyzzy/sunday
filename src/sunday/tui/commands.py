@@ -18,12 +18,20 @@ Sunday Slash 命令：
   /new              开始新会话
   /reset            重置当前会话上下文
   /abort            中止当前运行任务
+  /copy             切换复制模式（与 Ctrl+Y 相同）
   /memory [file]    查看记忆文件 (SOUL/MEMORY/USER/TOOLS)
   /skills           列出可用技能
   /history          查看当前会话历史
   /delete <id>      删除指定会话（清除日志与报告，不可恢复）
   /trust            启用信任模式，危险操作自动确认（当前会话有效）
   /help             显示此帮助
+
+复制模式说明：
+  进入后终端接管鼠标，可拖拽选中文字（带高亮）。
+  WSL/Windows Terminal：右键 或 Ctrl+Shift+C 复制；或按 Ctrl+C 退出
+  Linux：Ctrl+Shift+C 复制；或按 Ctrl+C 自动将选区提升到剪贴板后退出
+  macOS：Cmd+C 复制；或按 Ctrl+C 退出
+  键盘滚动：↑/↓/PgUp/PgDn（进入复制模式时焦点已转到对话区）
 """
 
 VALID_THINKING_LEVELS = {"off", "minimal", "low", "medium", "high"}
@@ -72,6 +80,8 @@ class SlashCommandHandler:
             return await self._cmd_delete(args)
         if cmd == "trust":
             return await self._cmd_trust()
+        if cmd == "copy":
+            return await self._cmd_copy()
         if cmd == "help":
             return HELP_TEXT
 
@@ -164,3 +174,8 @@ class SlashCommandHandler:
                       data={"command": "trust", "args": ""})
         await self._ws.send(msg.to_json())
         return "已启用信任模式，当前会话的危险操作将自动确认。"
+
+    async def _cmd_copy(self) -> None:
+        """切换复制模式（与 Ctrl+Y 相同）。"""
+        await self._app.action_toggle_copy_mode()
+        return None
