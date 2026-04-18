@@ -94,11 +94,6 @@ async def search_files(directory: str, pattern: str) -> str:
         return f"[错误] 搜索文件失败：{e}"
 
 
-def make_session_report_dir(base_dir: Path, task: str, session_id: str) -> Path:
-    """根据任务首句生成可读目录名，格式：{task_slug}_{session_id[:6]}"""
-    slug = re.sub(r'[^\w\u4e00-\u9fff]+', '_', task[:40]).strip('_') or "task"
-    return base_dir / f"{slug}_{session_id[:6]}"
-
 
 def format_report_footer(result: str, report_dir: "Path | None") -> str:
     """生成报告目录信息块，供 CLI 打印或 Gateway 拼入 DONE content。"""

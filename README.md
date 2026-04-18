@@ -312,31 +312,52 @@ with open(f"{report_dir}/result.json", "w") as f:
 
 ## 记忆系统
 
-Sunday 使用分层文件记忆，所有文件存储在 `~/.sunday/workspace/`（生产）或 `workspace/`（开发）。
+Sunday 使用 **四层分级文件记忆**，数据本地存储，不上传云端。
 
-### 记忆层级
+### 记忆四层架构
 
-| 文件 | 层级 | 内容 | 更新频率 |
-|------|------|------|----------|
-| `SOUL.md` | L0 永久 | 身份、性格、工作原则 | 手动编辑 |
-| `AGENTS.md` | L0 永久 | 操作规则、安全边界 | 手动编辑 |
-| `MEMORY.md` | L1 长期 | 跨会话关键记忆 | AI 自动整合 |
-| `USER.md` | L1 长期 | 用户画像与偏好 | AI 自动更新 |
-| `memory/YYYY-MM-DD.md` | L2 每日 | 当天操作日志 | 每次会话写入 |
-| `sessions/*.jsonl` | 临时 | 完整会话转录 | 每次会话生成 |
+```
+~/.sunday/
+├── workspace/          # L0 永久层：用户静态配置（可 git 管理）
+│   ├── SOUL.md         # Agent 身份与个性
+│   ├── AGENTS.md       # 操作规则与安全边界
+│   └── TOOLS.md        # 工具使用约定
+│
+├── memory/             # L1+L2：AI 维护的动态记忆（运行时产物）
+│   ├── MEMORY.md       # L1 长期：跨会话事实摘要
+│   ├── USER.md         # L1 长期：用户画像与偏好
+│   └── daily/          # L2 每日：当天操作日志（30天 TTL）
+│       └── YYYY-MM-DD.md
+│
+└── sessions/           # L3 会话层：完整对话记录
+    ├── index.json      # 快速概要列表
+    └── {session_id}/
+        ├── meta.json   # 元数据（title、turn_count）
+        ├── stream.jsonl    # 原始事件流
+        └── turns/
+            └── {turn_id}.json  # 每轮：输入+计划+执行+输出
+```
+
+**数据流**：L3 原始记录 →[自动整合]→ L2 每日摘要 →[自动整合]→ L1 长期记忆
+
+| 层级 | 路径 | 维护者 | 注入方式 |
+|------|------|--------|----------|
+| L0 永久 | `workspace/*.md` | 用户手动编辑 | 每次 session 自动注入 |
+| L1 长期 | `memory/MEMORY.md`、`USER.md` | AI 自动写入 | 每次 session 自动注入 |
+| L2 每日 | `memory/daily/YYYY-MM-DD.md` | AI 自动写入 | 今日+昨日自动注入 |
+| L3 会话 | `sessions/{id}/` | 自动记录 | 当前 session 历史自动注入；跨 session 检索（规划中）|
 
 ### 个性化配置
 
-直接编辑 `workspace/SOUL.md` 修改 Sunday 的性格和工作原则。这是用户配置领域，AI 不会自动修改此文件。
+直接编辑 `SOUL.md` 修改 Sunday 的性格和工作原则（AI 不会自动修改此文件）：
 
 ```bash
-# 用你喜欢的编辑器打开
 vim ~/.sunday/workspace/SOUL.md
 ```
 
 ### 记忆整合
 
-每日凌晨（默认 4:00）自动运行整合脚本，清理过期日志、更新 MEMORY.md：
+每日凌晨（默认 4:00）自动清理过期日志、更新长期记忆：
 
 ```bash
 # 手动触发

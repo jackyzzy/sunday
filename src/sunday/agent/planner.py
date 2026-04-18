@@ -53,8 +53,9 @@ class Planner:
         # 注入对话历史（让 Planner 区分新任务/续任务）
         history_context = ""
         if state.history:
+            limit = self.config.memory.history_max_chars
             history_lines = "\n".join(
-                f"{m.role}: {m.content[:300]}..." if len(m.content) > 300 else f"{m.role}: {m.content}"
+                f"{m.role}: {m.content[:limit]}..." if len(m.content) > limit else f"{m.role}: {m.content}"
                 for m in state.history[-10:]
             )
             history_context = f"对话历史：\n{history_lines}\n\n---\n\n"

@@ -3,6 +3,7 @@ import os
 import signal
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import click
@@ -53,8 +54,6 @@ def run(task, thinking, model, yes):
 
 async def _run_task(task: str, thinking: str, model_override: str | None, yes: bool = False):
     """实际执行任务的异步函数（Phase 4：接入工具系统与技能）"""
-    import uuid
-
     from sunday.agent.models import AgentState, ThinkingLevel
     from sunday.bootstrap import build_agent_loop
     from sunday.config import settings
@@ -119,13 +118,21 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
                 click.echo(f"  {icon} {step_id}{suffix}")
 
     try:
+        from sunday.gateway.session import SessionManager
+
+        cfg = cfg_settings.sunday  # SundayConfig
         level = ThinkingLevel(thinking)
+
+        # 通过 SessionManager 创建规范的 session 目录（L3），保持 CLI/TUI 一致性
+        session_mgr = SessionManager(cfg.agent.sessions_dir)
+        session_id = session_mgr.new_session()
+        turn_id = uuid.uuid4().hex[:8]
         state = AgentState(
-            session_id=str(uuid.uuid4()),
+            session_id=session_id,
             task=task,
             thinking_level=level,
+            turn_id=turn_id,
         )
-        cfg = cfg_settings.sunday  # SundayConfig
 
         # CLI 确认处理器：stdin 读取 y/n；非交互模式自动拒绝
         async def cli_confirm(tool_name: str, arguments: dict, session_id: str) -> bool:
@@ -143,12 +150,24 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
             except click.exceptions.Abort:
                 return False
 
-        loop = build_agent_loop(cfg, cli_emit, mode="cli", confirmation_handler=cli_confirm)
-        result = await loop.run(state)
+        from sunday.gateway.protocol import EventType
         from sunday.tools.cli_tool import format_report_footer
+
+        # 写 SEND 到 stream（任务执行前）
+        await session_mgr.append_stream(session_id, EventType.SEND, {"content": task})
+
+        loop = build_agent_loop(cfg, cli_emit, mode="cli", confirmation_handler=cli_confirm)
+        result = ""
+        try:
+            result = await loop.run(state) or ""
+        finally:
+            # 无论成功还是异常，都写 DONE 到 stream（保持 L3 完整性）
+            await session_mgr.append_stream(session_id, EventType.DONE, {"content": result})
+
         click.echo("\n" + "─" * 50)
         click.echo(result)
-        footer = format_report_footer(result, getattr(loop, "session_report_dir", None))
+        report_path = cfg.agent.sessions_dir / session_id / "reports" / turn_id
+        footer = format_report_footer(result, report_path)
         if footer:
             click.echo(footer)
     except Exception as e:

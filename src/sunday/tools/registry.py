@@ -167,7 +167,11 @@ class ToolRegistry:
 
     async def execute(self, tool_name: str, arguments: dict[str, Any], session_id: str) -> str:
         """执行工具调用，返回 Guard 处理后的字符串。"""
-        # [0] 健康状态检查（check_tool_health 自身豁免，避免递归拦截）
+        # [0] 存在性检查
+        if tool_name not in self._tools:
+            return f"[工具错误] 未知工具：{tool_name}"
+
+        # [1] 健康状态检查（check_tool_health 自身豁免，避免递归拦截）
         if tool_name != "check_tool_health" and self._health_store.is_blocked(tool_name):
             h = self._health_store.get(tool_name)
             status_str = h.error_type.value if h.error_type else "unavailable"
@@ -176,13 +180,9 @@ class ToolRegistry:
                 msg += f"，建议: {h.suggestion}"
             return msg
 
-        # [1] 存在性检查
-        if tool_name not in self._tools:
-            return f"[工具错误] 未知工具：{tool_name}"
-
         meta, fn = self._tools[tool_name]
 
-        # [2] allow_list / deny_list 过滤
+        # [2] allow_list / deny_list 过滤（已确认工具存在）
         if self._allow_list and tool_name not in self._allow_list:
             return f"[工具拒绝] 工具 {tool_name} 不在允许列表中"
         if tool_name in self._deny_list:

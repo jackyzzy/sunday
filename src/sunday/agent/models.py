@@ -38,7 +38,6 @@ class Step(BaseModel):
 
     id: str
     intent: str
-    expected_input: str = ""
     expected_output: str = ""
     success_criteria: str = ""
     depends_on: list[str] = Field(default_factory=list)
@@ -107,6 +106,7 @@ class AgentState(BaseModel):
 
     session_id: str
     task: str
+    turn_id: str = ""  # gateway 由 server 注入；CLI 由 cli.py 生成
     history: list[Message] = Field(default_factory=list)
     plan: Plan | None = None
     step_results: list[StepResult] = Field(default_factory=list)

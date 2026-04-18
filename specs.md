@@ -18,6 +18,17 @@ Sunday 是一个**本地优先（local-first）的个人边端 AI 智能体**，
 
 **参考系统**：OpenClaw（本地边端智能体）、Claude Code（终端 AI 助手）
 
+**记忆架构对比**（见 §3.3）：
+
+| 框架 | 记忆分层 | Session/Memory 边界 |
+|------|---------|---------------------|
+| OpenClaw | MEMORY.md / daily/*.md（文件式）| Session 管对话转录，Memory 是显式写入 Markdown 的存储接口 |
+| MemGPT/Letta | In-context / Archival（向量检索）| 边界由 token 预算决定 |
+| Claude Code | CLAUDE.md（静态）/ 对话历史（缓存）| 隐式分层，prompt cache 是核心机制 |
+| **Sunday** | L0/L1/L2/L3 四层（文件优先，服务化预留）| **Session = prompt 编排（agent 侧）；Memory = 存储接口（可独立服务化）** |
+
+Sunday 与 OpenClaw 最接近，核心差异：明确区分"用户静态配置（L0）"与"AI 运行时产物（L1/L2/L3）"，目录结构更清晰，且为 Memory 服务化预留了接口边界。
+
 ---
 
 ## 2. 系统架构
@@ -127,36 +138,68 @@ Gateway（本地守护进程）
 
 ### 3.3 记忆系统
 
-#### F-10：工作区记忆（持久，文件存储）
-工作区路径：`~/.sunday/workspace/`
+#### 记忆四层架构
+
+| 层级 | 路径 | 内容 | 维护者 |
+|------|------|------|--------|
+| **L0 永久层** | `~/.sunday/workspace/SOUL.md`、`AGENTS.md`、`TOOLS.md` | Agent 身份、操作规则、工具约定 | 用户手动编辑，不被 AI 覆写 |
+| **L1 长期层** | `~/.sunday/memory/MEMORY.md`、`USER.md` | 跨会话事实摘要、用户画像 | AI 自动写入（consolidation） |
+| **L2 每日层** | `~/.sunday/memory/daily/YYYY-MM-DD.md` | 每日会话摘要（30 天 TTL）| AI 自动写入（从 L3 提炼） |
+| **L3 会话层** | `~/.sunday/sessions/{id}/` | 完整对话详情（按轮次组织）| 自动记录 |
+
+**数据流**：L3 原始记录 →[AI consolidation]→ L2 每日摘要 →[AI consolidation]→ L1 长期记忆
+
+#### F-10：工作区配置（L0）
+路径：`~/.sunday/workspace/`（用户静态配置，可 git 管理）
 
 | 文件 | 内容 | 生命周期 |
 |------|------|----------|
 | `SOUL.md` | 智能体身份、人格、价值观、行为边界 | 永久，用户手动编辑 |
-| `AGENTS.md` | 操作规则、记忆使用方式、工具使用约定 | 永久，用户手动编辑 |
-| `MEMORY.md` | 智能体主动整合的长期事实和偏好 | 长期，智能体写入 |
-| `USER.md` | 用户画像：称谓、角色、偏好、工作习惯 | 长期，智能体写入 |
-| `TOOLS.md` | 本地工具使用约定和注意事项 | 长期，用户/智能体写入 |
-| `memory/YYYY-MM-DD.md` | 每日运行日志（事件、决策、任务结果）| 短期（30天 TTL）|
+| `AGENTS.md` | 操作规则、记忆使用方式 | 永久，用户手动编辑 |
+| `TOOLS.md` | 工具使用约定和注意事项 | 长期，用户/智能体写入 |
 
-#### F-11：会话存储（临时，JSONL）
-- 路径：`~/.sunday/sessions/<sessionId>.jsonl`
-- 格式：每行一个 JSON 对象（用户消息、助手消息、工具调用、系统事件）
-- 追加写入，保证原子性
-- 会话列表元数据：`~/.sunday/sessions/index.json`
+#### F-10b：动态记忆（L1+L2）
+路径：`~/.sunday/memory/`（AI 运行时产物，不建议 git 管理）
+
+| 文件 | 内容 | 生命周期 |
+|------|------|----------|
+| `MEMORY.md` | 智能体主动整合的长期事实和偏好 | 长期，AI 写入 |
+| `USER.md` | 用户画像：称谓、角色、偏好、工作习惯 | 长期，AI 写入 |
+| `daily/YYYY-MM-DD.md` | 每日运行日志和任务摘要 | 短期（30天 TTL）|
+
+#### F-11：会话存储（L3）
+路径：`~/.sunday/sessions/{session_id}/`
+
+```
+{session_id}/
+├── meta.json       # 会话元数据（title、turn_count、turns 列表）
+├── stream.jsonl    # 原始事件流（append-only，含 turn_id 字段）
+└── turns/
+    └── {turn_id}.json   # 每轮完整记录：user_input + plan + execution + output
+```
+
+会话列表索引：`~/.sunday/sessions/index.json`
 
 #### F-12：上下文注入（分层加载）
-系统提示组装顺序（L0 始终注入，L1/L2 按需）：
-- **L0（始终）**：`SOUL.md` + `AGENTS.md` + `MEMORY.md`（最近 100 行）+ `USER.md`
-- **L0（始终）**：今天和昨天的 `memory/YYYY-MM-DD.md`
-- **L0（始终）**：技能列表摘要（名称 + 描述，不含完整内容）
-- **L1（按需）**：完整的 `SKILL.md` 内容（Agent 主动请求时加载）
-- **L2（按需）**：历史 `memory/YYYY-MM-DD.md` 文件
+系统提示组装顺序：
+- **L0（始终）**：`SOUL.md` + `AGENTS.md`
+- **L1（始终）**：`MEMORY.md`（最近 100 行）+ `USER.md`
+- **L2（始终）**：今天和昨天的 `daily/YYYY-MM-DD.md`
+- **技能摘要（始终）**：名称 + 描述（不含完整内容）
+- **L0（始终）**：`TOOLS.md` + 当前日期
+- **L3 当前 session（始终）**：最近 N 轮对话历史（由 `_extract_conversation()` 注入）
+- **L3 跨 session（按需，待实现）**：历史 turns 语义检索
 
 #### F-13：记忆整合（自动）
-- 每次会话结束后，Agent 主动将重要信息写入 `MEMORY.md` 和当日日志
-- 上下文压缩前触发一次记忆整合提示（防止信息丢失）
-- 每日凌晨 4 点（可配置）运行 `memory_consolidate` 脚本清理过期日志
+- 每次会话结束后，AI 将重要信息写入 `MEMORY.md` 和当日日志
+- 每日凌晨 4 点（可配置）清理过期 daily 日志
+
+#### F-14：Memory 服务化（未来规划）
+当前阶段 Memory = `MemoryManager`（本地文件实现）。
+未来计划抽象为 `MemoryStore` Protocol，支持：
+- `FileMemoryStore`（当前实现）
+- `DatabaseMemoryStore`（HTTP/gRPC 远程服务）
+- 内容自动摘要、压缩、淘汰（调用方无感知）
 
 ### 3.4 工具系统
 

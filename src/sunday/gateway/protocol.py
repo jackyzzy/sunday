@@ -24,9 +24,15 @@ class EventType(str, Enum):
     TOOL_END = "tool_end"
     CONFIRM_REQUEST = "confirm_request"
     STEP_RESULT = "step_result"
+    SUB_STEP_RESULT = "sub_step_result"
+    TEAM_ERROR = "team_error"
     DONE = "done"
     ERROR = "error"
     SLASH_RESULT = "slash_result"
+
+    # 仅写入 session JSONL，不推送 WebSocket
+    TURN_START = "turn_start"
+    TURN_END = "turn_end"
 
 
 class Message:

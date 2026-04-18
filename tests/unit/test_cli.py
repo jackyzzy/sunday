@@ -210,7 +210,10 @@ def test_memory_show_file_missing(runner, tmp_path):
         "ANTHROPIC_API_KEY": "fake-key",
         "SUNDAY_CONFIGS_DIR": str(tmp_path),
     }):
-        result = runner.invoke(main, ["memory", "show", "SOUL"])
+        from sunday.config import Settings
+        fake_settings = Settings()
+        with patch("sunday.config.settings", fake_settings):
+            result = runner.invoke(main, ["memory", "show", "SOUL"])
     # 文件不存在时应提示错误（可能是 exit_code != 0 或输出包含"不存在"）
     combined = result.output + (result.stderr or "")
     assert "不存在" in combined or "not" in combined.lower() or result.exit_code != 0

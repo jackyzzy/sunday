@@ -26,21 +26,21 @@ def _make_settings(tmp_path, provider="anthropic"):
 # ── 目录初始化 ────────────────────────────────────────────────────────────────
 
 async def test_init_creates_directories(tmp_path):
-    """MemoryManager 初始化时自动创建目录"""
-    workspace = tmp_path / "workspace"
-    MemoryManager(workspace)
-    assert workspace.exists()
-    assert (workspace / "memory").exists()
+    """MemoryManager 初始化时自动创建 memory_dir 和 daily/ 子目录"""
+    memory_dir = tmp_path / "memory"
+    MemoryManager(memory_dir)
+    assert memory_dir.exists()
+    assert (memory_dir / "daily").exists()
 
 
 # ── append_daily_log ──────────────────────────────────────────────────────────
 
 async def test_append_daily_log_creates_file(tmp_path):
-    """append_daily_log 创建今日日志文件"""
+    """append_daily_log 创建今日日志文件（memory_dir/daily/YYYY-MM-DD.md）"""
     mm = MemoryManager(tmp_path)
     await mm.append_daily_log("第一条日志\n")
     today = date.today().isoformat()
-    log_path = tmp_path / "memory" / f"{today}.md"
+    log_path = tmp_path / "daily" / f"{today}.md"
     assert log_path.exists()
     assert "第一条日志" in log_path.read_text(encoding="utf-8")
 
@@ -51,7 +51,7 @@ async def test_append_daily_log_appends(tmp_path):
     await mm.append_daily_log("第一条\n")
     await mm.append_daily_log("第二条\n")
     today = date.today().isoformat()
-    content = (tmp_path / "memory" / f"{today}.md").read_text(encoding="utf-8")
+    content = (tmp_path / "daily" / f"{today}.md").read_text(encoding="utf-8")
     assert "第一条" in content
     assert "第二条" in content
 
@@ -61,7 +61,7 @@ async def test_append_daily_log_adds_newline_if_missing(tmp_path):
     mm = MemoryManager(tmp_path)
     await mm.append_daily_log("没有换行")
     today = date.today().isoformat()
-    content = (tmp_path / "memory" / f"{today}.md").read_text(encoding="utf-8")
+    content = (tmp_path / "daily" / f"{today}.md").read_text(encoding="utf-8")
     assert content.endswith("\n")
 
 
@@ -120,16 +120,16 @@ async def test_update_user_profile_upsert(tmp_path):
 # ── consolidate_session ───────────────────────────────────────────────────────
 
 async def test_consolidate_session_writes_log(tmp_path):
-    """consolidate_session 同步写入今日日志"""
-    from sunday.agent.models import AgentState, StepResult, StepStatus
+    """consolidate_session 同步写入今日日志（memory_dir/daily/YYYY-MM-DD.md）"""
+    from sunday.agent.models import AgentState, TeamResult
     mm = MemoryManager(tmp_path)
     state = AgentState(session_id="test123", task="写单元测试")
-    state.step_results = [
-        StepResult(step_id="step_1", status=StepStatus.DONE, output="完成了"),
+    state.team_results = [
+        TeamResult(step_id="step_1", passed=True, output="完成了"),
     ]
     await mm.consolidate_session(state)
     today = date.today().isoformat()
-    log_path = tmp_path / "memory" / f"{today}.md"
+    log_path = tmp_path / "daily" / f"{today}.md"
     content = log_path.read_text(encoding="utf-8")
     assert "写单元测试" in content
     assert "test123" in content

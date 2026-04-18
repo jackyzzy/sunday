@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable
 
+import httpx
 import websockets
 from websockets.asyncio.server import serve
 
+from sunday.agent.models import AgentState, Message as ConvMessage, ThinkingLevel
 from sunday.gateway.protocol import EventType, Message
 from sunday.gateway.session import SessionManager
 
@@ -118,11 +122,34 @@ class Gateway:
             })
             return
 
-        # 记录用户消息
-        await self._session_mgr.append(session_id, EventType.SEND, {"content": content})
+        # 确保 session 目录存在（TUI 在客户端生成 session_id，Gateway 首次收到时自动创建）
+        self._session_mgr.ensure_session(session_id)
+
+        # 生成轮次 ID，计算当前轮次序号
+        turn_id = uuid.uuid4().hex[:8]
+        turn_start_ts = datetime.now(timezone.utc).isoformat()
+        # turn_buffer 在内存中积累本轮数据，turn_end 时一次性写入 turns/{turn_id}.json
+        turn_buffer: dict = {
+            "turn_id": turn_id,
+            "turn_index": None,  # write_turn 时由 meta.json turn_count 决定
+            "ts_start": turn_start_ts,
+            "ts_end": None,
+            "outcome": None,
+            "user_input": content,
+            "plan": None,
+            "execution": [],
+            "output": None,
+        }
+
+        # 写 TURN_START + SEND 到 stream
+        await self._session_mgr.append_stream(
+            session_id, EventType.TURN_START, {"content": content}, turn_id
+        )
+        await self._session_mgr.append_stream(
+            session_id, EventType.SEND, {"content": content}, turn_id
+        )
 
         # 构建 AgentLoop 并异步运行
-        from sunday.agent.models import AgentState, Message, ThinkingLevel
         # 读取最近对话历史注入 Planner 上下文
         recent_events = self._session_mgr.load_history(session_id, max_events=50)
         history = _extract_conversation(recent_events, max_turns=5)
@@ -131,28 +158,34 @@ class Gateway:
         except ValueError:
             thinking = ThinkingLevel(self._settings.sunday.reasoning.thinking_level)
         state = AgentState(session_id=session_id, task=content, history=history,
-                           thinking_level=thinking)
+                           thinking_level=thinking, turn_id=turn_id)
 
         async def run_loop():
+            nonlocal turn_buffer
+            outcome = "error"
+            display = ""
             try:
                 loop = None
                 if self._mock_loop_run is not None:
                     result = await self._mock_loop_run(state)
                 else:
                     loop = self._build_agent_loop(session_id, task=content,
-                                                  model_override=model_override)
+                                                  model_override=model_override,
+                                                  turn_id=turn_id,
+                                                  turn_buffer=turn_buffer)
                     result = await loop.run(state)
                 from sunday.tools.cli_tool import format_report_footer
-                footer = format_report_footer(
-                    result or "", getattr(loop, "session_report_dir", None)
-                )
+                report_path = self._session_mgr._dir / session_id / "reports" / turn_id
+                footer = format_report_footer(result or "", report_path)
                 display = (result or "") + footer
+                turn_buffer["output"] = display
+                outcome = "success"
                 await self.emit(session_id, EventType.DONE, {"content": display})
             except asyncio.CancelledError:
+                outcome = "aborted"
                 await self.emit(session_id, EventType.STATUS, {"state": "aborted"})
                 raise
             except Exception as e:
-                import httpx
                 if isinstance(e, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
                     msg = f"网络连接失败（{type(e).__name__}），请检查网络或代理配置"
                     logger.error("AgentLoop 网络异常：%s", msg)
@@ -161,6 +194,19 @@ class Gateway:
                     logger.exception("AgentLoop 异常：%s", e)
                 await self.emit(session_id, EventType.ERROR, {"message": msg})
             finally:
+                ts_end = datetime.now(timezone.utc).isoformat()
+                turn_buffer["ts_end"] = ts_end
+                turn_buffer["outcome"] = outcome
+                # 写 DONE 到 stream（修复 DONE 未落盘的 bug）
+                await self._session_mgr.append_stream(
+                    session_id, EventType.DONE, {"content": display}, turn_id
+                )
+                # 写 TURN_END 到 stream
+                await self._session_mgr.append_stream(
+                    session_id, EventType.TURN_END, {"outcome": outcome}, turn_id
+                )
+                # 写结构化 turn 文件
+                await self._session_mgr.write_turn(session_id, turn_buffer)
                 self._running_tasks.pop(session_id, None)
 
         task = asyncio.create_task(run_loop())
@@ -215,19 +261,12 @@ class Gateway:
                     "message": "[错误] 请指定要删除的 session ID，用法：/delete <session_id>",
                 })
                 return
-            # 1. 删除 session 文件 + index
+            # 1. 删除 session 目录（含 reports/ 子目录）及 index
             self._session_mgr.delete_session(target_id)
             # 2. 删除 log 文件
             log_file = self._settings.sunday.agent.log_dir / f"{target_id}.jsonl"
             if log_file.exists():
                 log_file.unlink()
-            # 3. 删除匹配前缀的 report 目录
-            import shutil
-            report_dir = self._settings.sunday.agent.report_dir
-            prefix = target_id[:6]
-            for d in report_dir.glob(f"*_{prefix}"):
-                if d.is_dir():
-                    shutil.rmtree(d)
             await self.emit(session_id, EventType.SLASH_RESULT, {
                 "command": "delete",
                 "deleted_id": target_id,
@@ -310,10 +349,13 @@ class Gateway:
     # ── 私有构建方法 ──────────────────────────────────────────────────────
 
     def _build_agent_loop(self, session_id: str, task: str = "",
-                           model_override: str | None = None):
+                           model_override: str | None = None,
+                           turn_id: str | None = None,
+                           turn_buffer: dict | None = None):
         """构建完整 AgentLoop（注入所有依赖）。"""
         from sunday.bootstrap import build_agent_loop
 
+        ET = EventType
         cfg = self._settings.sunday  # SundayConfig
 
         if model_override:
@@ -329,28 +371,53 @@ class Gateway:
                 return True
             return await self.request_confirm(tool_name, arguments, session_id)
 
+        # 需要写入 stream.jsonl 的事件类型
+        _STREAM_RECORDABLE = {
+            ET.PLAN, ET.STEP_RESULT, ET.TOOL_START, ET.TOOL_END, ET.STATUS,
+        }
+
         async def loop_emit(sid: str, event_type, data: dict) -> None:
+            # 推送 WebSocket（不变）
             await self.emit(sid, event_type, data)
+            # 写入 stream.jsonl
+            if turn_id is not None:
+                try:
+                    et = event_type if isinstance(event_type, ET) else ET(event_type)
+                except ValueError:
+                    return
+                if et in _STREAM_RECORDABLE:
+                    await self._session_mgr.append_stream(sid, et, data, turn_id=turn_id)
+                # 更新 turn_buffer
+                if turn_buffer is not None:
+                    if et == ET.PLAN:
+                        turn_buffer["plan"] = data
+                    elif et == ET.STEP_RESULT:
+                        turn_buffer["execution"].append(dict(data))
+                    elif et == ET.TOOL_END and turn_buffer["execution"]:
+                        last_step = turn_buffer["execution"][-1]
+                        last_step.setdefault("tool_calls", []).append(data)
 
         return build_agent_loop(cfg, loop_emit, mode="gateway", confirmation_handler=gw_confirm)
 
 
 def _extract_conversation(events: list[dict], max_turns: int = 5) -> list:
     """从会话 JSONL 事件流中提取最近 N 轮对话（send + done 配对）。"""
-    from sunday.agent.models import Message
-
-    messages: list[Message] = []
+    messages: list[ConvMessage] = []
     for ev in events:
         ev_type = ev.get("type", "")
         data = ev.get("data", {})
         if ev_type == "send":
             content = data.get("content", "")
             if content:
-                messages.append(Message(role="user", content=content))
+                messages.append(ConvMessage(role="user", content=content))
         elif ev_type == "done":
             content = data.get("content", "")
             if content:
-                messages.append(Message(role="assistant", content=content))
+                messages.append(ConvMessage(role="assistant", content=content))
+        elif ev_type == "error":
+            msg = data.get("message", "")
+            if msg:
+                messages.append(ConvMessage(role="assistant", content=f"[执行出错：{msg}]"))
 
     # 取最近 max_turns 轮（一轮 = user + assistant），排除当前轮（最后一条 user 消息）
     # 当前轮的 user 消息已经通过 task 传入，不重复注入

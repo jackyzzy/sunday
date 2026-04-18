@@ -179,7 +179,7 @@ async def test_simple_step_routes_to_simple_node(tmp_path):
 
     with upatch("sunday.agent.react_agent.SimpleNode", return_value=mock_simple_node) as mock_sn_cls, \
          upatch("sunday.agent.react_agent.Team", return_value=mock_team) as mock_team_cls:
-        await agent.execute(state, _noop_emit, MagicMock())
+        await agent.execute(state, _noop_emit)
 
     # SimpleNode 被实例化，Team 未被实例化
     mock_sn_cls.assert_called_once()
@@ -219,7 +219,7 @@ async def test_complex_step_routes_to_team(tmp_path):
 
     with upatch("sunday.agent.react_agent.SimpleNode", return_value=mock_simple_node) as mock_sn_cls, \
          upatch("sunday.agent.react_agent.Team", return_value=mock_team) as mock_team_cls:
-        await agent.execute(state, _noop_emit, MagicMock())
+        await agent.execute(state, _noop_emit)
 
     # Team 被实例化，SimpleNode 未被实例化
     mock_team_cls.assert_called_once()

@@ -1,4 +1,20 @@
-"""Phase 3：MemoryManager — 文件系统记忆读写"""
+"""MemoryManager — 文件系统记忆读写
+
+记忆分层：
+    L1  ~/.sunday/memory/MEMORY.md    — 长期事实摘要（AI 维护）
+    L1  ~/.sunday/memory/USER.md      — 用户画像（AI 维护）
+    L2  ~/.sunday/memory/daily/       — 每日摘要（从 L3 提炼）
+
+# TODO(memory-service): 未来抽象为独立 MemoryStore 服务接口
+# class MemoryStore(Protocol):
+#     async def read(self, layer: str, key: str) -> str: ...
+#     async def write(self, layer: str, key: str, content: str) -> None: ...
+#     async def append(self, layer: str, key: str, content: str) -> None: ...
+#     async def search(self, query: str, layer: str | None = None) -> list[str]: ...
+#       - L3 跨会话检索：按关键词或语义查找历史 turns
+#     async def consolidate(self, from_layer: str, to_layer: str) -> None: ...
+# 当前阶段：FileMemoryManager 直接实现，不经过协议层
+"""
 from __future__ import annotations
 
 import asyncio
@@ -35,28 +51,35 @@ _CONSOLIDATE_PROMPT = """请从以下会话摘要中，提取值得长期记忆�
 
 
 class MemoryManager:
-    """文件系统记忆管理器。
+    """文件系统记忆管理器（L1+L2 层）。
 
     所有写操作通过 asyncio.Lock 串行化。
     文件写入使用 .tmp + rename 保证原子性。
+
+    路径约定：
+        memory_dir/MEMORY.md          — L1 长期事实摘要
+        memory_dir/USER.md            — L1 用户画像
+        memory_dir/daily/YYYY-MM-DD.md — L2 每日摘要
     """
 
-    def __init__(self, workspace_dir: Path, config: "SundayConfig | None" = None) -> None:
-        self.workspace_dir = workspace_dir
-        self.memory_dir = workspace_dir / "memory"
+    def __init__(self, memory_dir: Path, config: "SundayConfig | None" = None,
+                 workspace_dir: Path | None = None) -> None:
+        self.memory_dir = memory_dir
+        # workspace_dir 保留兼容参数，实际读写均使用 memory_dir
+        self.workspace_dir = workspace_dir or memory_dir
         self.config = config
         self._lock = asyncio.Lock()
 
         # 确保目录存在
-        self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.memory_dir.mkdir(parents=True, exist_ok=True)
+        (self.memory_dir / "daily").mkdir(parents=True, exist_ok=True)
 
     # ── 公开接口 ──────────────────────────────────────────────────────────
 
     async def append_daily_log(self, content: str) -> None:
-        """追加内容到今日 memory/YYYY-MM-DD.md。"""
+        """追加内容到今日 memory/daily/YYYY-MM-DD.md（L2 层）。"""
         today = date.today().isoformat()
-        log_path = self.memory_dir / f"{today}.md"
+        log_path = self.memory_dir / "daily" / f"{today}.md"
         async with self._lock:
             with log_path.open("a", encoding="utf-8") as f:
                 f.write(content)
@@ -70,12 +93,12 @@ class MemoryManager:
         value: str,
         priority: str = "P1",
     ) -> None:
-        """在 MEMORY.md 的 section 下 upsert 一条记忆条目。
+        """在 MEMORY.md 的 section 下 upsert 一条记忆条目（L1 层）。
 
         格式：- [P1][2026-03-26] key：value
         如果该 key 已存在，则更新；否则插入到 section 末尾。
         """
-        memory_path = self.workspace_dir / "MEMORY.md"
+        memory_path = self.memory_dir / "MEMORY.md"
         today = date.today().isoformat()
         entry = f"- [{priority}][{today}] {key}：{value}"
 
@@ -83,7 +106,6 @@ class MemoryManager:
             content = memory_path.read_text(encoding="utf-8") if memory_path.exists() else ""
             lines = content.splitlines(keepends=True)
 
-            # 尝试找到 section 标题行
             section_header = f"## {section}"
             section_idx = None
             for i, line in enumerate(lines):
@@ -92,16 +114,13 @@ class MemoryManager:
                     break
 
             if section_idx is None:
-                # section 不存在，追加新 section
                 if not content.endswith("\n") and content:
                     lines.append("\n")
                 lines.append(f"\n{section_header}\n")
                 lines.append(f"{entry}\n")
             else:
-                # 在 section 内找到 key 行（查找含 "] key：" 的行）
                 key_marker = f"] {key}："
                 key_idx = None
-                # 扫描 section 到下一个 ## 或文件末尾
                 for i in range(section_idx + 1, len(lines)):
                     if lines[i].startswith("## "):
                         break
@@ -112,7 +131,6 @@ class MemoryManager:
                 if key_idx is not None:
                     lines[key_idx] = f"{entry}\n"
                 else:
-                    # 找到 section 末尾（下一个 ## 前）插入
                     insert_at = len(lines)
                     for i in range(section_idx + 1, len(lines)):
                         if lines[i].startswith("## "):
@@ -123,11 +141,11 @@ class MemoryManager:
             self._atomic_write(memory_path, "".join(lines))
 
     async def update_user_profile(self, key: str, value: str) -> None:
-        """在 USER.md 中 upsert 一条用户画像条目。
+        """在 USER.md 中 upsert 一条用户画像条目（L1 层）。
 
-        格式：- key：value（在"## 基本信息"或尾部）
+        格式：- key：value
         """
-        user_path = self.workspace_dir / "USER.md"
+        user_path = self.memory_dir / "USER.md"
         entry = f"- {key}：{value}"
         key_marker = f"- {key}："
 
@@ -138,22 +156,19 @@ class MemoryManager:
                 content = "# 用户画像\n"
             lines = content.splitlines(keepends=True)
 
-            # 找到已有的 key 行并更新
             for i, line in enumerate(lines):
                 if line.strip().startswith(key_marker):
                     lines[i] = f"{entry}\n"
                     self._atomic_write(user_path, "".join(lines))
                     return
 
-            # 未找到，追加到文件末尾
             if not content.endswith("\n") and content:
                 lines.append("\n")
             lines.append(f"{entry}\n")
             self._atomic_write(user_path, "".join(lines))
 
     async def consolidate_session(self, state: "AgentState") -> None:
-        """会话结束时调用：同步写今日日志，异步触发 AI 整合。"""
-        # 同步：写任务摘要到今日日志
+        """会话结束时调用：同步写今日日志，异步触发 AI 整合（L3→L2→L1）。"""
         steps_summary = "\n".join(
             f"- {r.step_id}（{'✓' if r.passed else '✗'}）：{r.output[:200]}"
             for r in state.team_results
@@ -165,14 +180,13 @@ class MemoryManager:
         )
         await self.append_daily_log(log_content)
 
-        # 异步：AI 提炼（不阻塞返回）
         if self.config is not None:
             asyncio.create_task(self._ai_consolidate(state))
 
     # ── 私有方法 ──────────────────────────────────────────────────────────
 
     async def _ai_consolidate(self, state: "AgentState") -> None:
-        """后台 LLM 提炼：从会话中提取值得长期记忆的内容。
+        """后台 LLM 提炼：从会话中提取值得长期记忆的内容（L3→L1）。
 
         失败时仅记录日志，不抛出异常，不影响用户。
         """
@@ -186,7 +200,7 @@ class MemoryManager:
 
             steps_summary = "\n".join(
                 f"- {r.step_id}: {r.output[:300]}"
-                for r in state.step_results
+                for r in state.team_results
             )
             prompt = _CONSOLIDATE_PROMPT.format(
                 task=state.task,

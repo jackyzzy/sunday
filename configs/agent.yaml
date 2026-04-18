@@ -1,22 +1,10 @@
 agent:
   name: Sunday
-  workspace_dir: .sunday/workspace
-  sessions_dir: .sunday/sessions
-  report_dir: .sunday/reports
+  workspace_dir: .sunday/workspace   # L0：用户静态配置（SOUL/AGENTS/TOOLS）
+  memory_dir: .sunday/memory         # L1+L2：AI 维护的动态记忆（MEMORY/USER/daily）
+  sessions_dir: .sunday/sessions     # L3：会话详细记录（reports 子目录在此下）
   log_dir: .sunday/logs
 
-# Anthropic
-# model:
-#   provider: anthropic  # anthropic | openai | google | ollama
-#   id: claude-opus-4-5
-#   temperature: 0.2
-#   max_tokens: 8192
-#   base_url: null        # OpenAI 兼容模型填写自定义端点 URL，Anthropic/Google 留 null
-#   api_key_env: null     # 指定 .env 中的变量名（如 DEEPSEEK_API_KEY），null 则按 provider 自动查找
-
-# ── OpenAI 兼容模型示例（取消注释并替换当前 model 块即可切换）──────────────────
-#
-# DeepSeek
 model:
   provider: openai
   id: deepseek-chat
@@ -24,45 +12,19 @@ model:
   max_tokens: 8192
   base_url: https://api.deepseek.com/v1
   api_key_env: DEEPSEEK_API_KEY
-#
-# Qwen（阿里云 DashScope）
-# model:
-#   provider: openai
-#   id: qwen-max
-#   temperature: 0.2
-#   max_tokens: 8192
-#   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-#   api_key_env: QWEN_API_KEY
-#
-# Moonshot
-# model:
-#   provider: openai
-#   id: moonshot-v1-8k
-#   temperature: 0.2
-#   max_tokens: 8192
-#   base_url: https://api.moonshot.cn/v1
-#   api_key_env: MOONSHOT_API_KEY
-#
-# Ollama（本地，无需 key）
-# model:
-#   provider: openai
-#   id: llama3.2
-#   temperature: 0.2
-#   max_tokens: 8192
-#   base_url: http://localhost:11434/v1
-#   api_key_env: null
 
 reasoning:
   max_steps: 20               # 任务顶层步骤数上限（超出则截断）
   max_react_iteration: 40     # 单个子步骤内 ReAct 工具调用轮次上限
   max_replans_per_step: 10    # Team 内层每个子步骤最多重规划次数
   max_replans: 40             # 整个任务外层重规划总次数兜底上限
-  thinking_level: medium  # off | minimal | low | medium | high
+  thinking_level: medium      # off | minimal | low | medium | high
 
 memory:
   consolidation_cron: "0 4 * * *"
   log_retention_days: 30
   l0_max_lines: 100
+  history_max_chars: 2000   # 多轮对话历史单条消息最大字符数
 
 tools:
   default_timeout: 60

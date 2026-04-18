@@ -58,7 +58,6 @@ def _make_mock_agent(plan, evaluate_return="任务完成！"):
     agent.config.reasoning.max_steps = 10
     agent.config.reasoning.max_replans = 5
     agent.config.agent.log_dir = None
-    agent.config.agent.report_dir = None
     agent.config.nodes = {}
     agent.emit = AsyncMock()
     agent.mode = "test"
@@ -164,7 +163,6 @@ async def test_team_failure_triggers_replan(tmp_path):
     agent.config.reasoning.max_steps = 10
     agent.config.reasoning.max_replans = 5
     agent.config.agent.log_dir = None
-    agent.config.agent.report_dir = None
     agent.config.nodes = {}
     agent.emit = AsyncMock()
     agent.mode = "test"
@@ -214,7 +212,6 @@ async def test_team_failure_no_replan_continues(tmp_path):
     agent.config.reasoning.max_steps = 10
     agent.config.reasoning.max_replans = 5
     agent.config.agent.log_dir = None
-    agent.config.agent.report_dir = None
     agent.config.nodes = {}
     agent.emit = AsyncMock()
     agent.mode = "test"
@@ -260,7 +257,6 @@ async def test_deps_satisfied_skips_unmet(tmp_path):
     agent.config.reasoning.max_steps = 10
     agent.config.reasoning.max_replans = 5
     agent.config.agent.log_dir = None
-    agent.config.agent.report_dir = None
     agent.config.nodes = {}
     agent.emit = AsyncMock()
     agent.mode = "test"
@@ -311,7 +307,6 @@ async def test_loop_injects_context_into_planner(tmp_path):
     agent.config.reasoning.max_steps = 10
     agent.config.reasoning.max_replans = 5
     agent.config.agent.log_dir = None
-    agent.config.agent.report_dir = None
     agent.config.nodes = {}
     agent.emit = AsyncMock()
     agent.mode = "test"
@@ -354,7 +349,6 @@ async def test_loop_calls_memory_consolidate(tmp_path):
     agent.config.reasoning.max_steps = 10
     agent.config.reasoning.max_replans = 5
     agent.config.agent.log_dir = None
-    agent.config.agent.report_dir = None
     agent.config.nodes = {}
     agent.emit = AsyncMock()
     agent.mode = "test"

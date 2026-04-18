@@ -15,6 +15,30 @@ from pydantic_settings import BaseSettings
 load_dotenv(override=False)
 
 
+_PROVIDER_ENV_MAP = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GOOGLE_API_KEY",
+}
+
+
+def _lookup_api_key(provider: str, api_key_env: str | None) -> str:
+    """从 os.environ 查找 API key，找不到时抛出 ValueError。"""
+    if api_key_env:
+        key = os.environ.get(api_key_env, "")
+        if not key:
+            raise ValueError(f"环境变量 '{api_key_env}' 未设置，请在 .env 中配置")
+        return key
+    env_var = _PROVIDER_ENV_MAP.get(provider, f"{provider.upper()}_API_KEY")
+    key = os.environ.get(env_var, "")
+    if not key:
+        raise ValueError(
+            f"未找到 provider '{provider}' 的 API key，"
+            f"请在 .env 中设置或在 agent.yaml 中配置 model.api_key_env"
+        )
+    return key
+
+
 def _resolve_configs_dir() -> Path:
     """定位 configs 目录。优先读 SUNDAY_CONFIGS_DIR 环境变量，否则从包位置推导。
 
@@ -42,29 +66,8 @@ class ModelConfig(BaseModel):
     api_key_env: str | None = None  # 指定从哪个环境变量读取 API key，优先于 provider 默认映射
 
     def get_api_key(self) -> str:
-        """从环境变量读取 API key，无需 Settings 对象。
-
-        优先使用 api_key_env 指定的环境变量名（来自 agent.yaml model.api_key_env），
-        未指定时按 provider 名称回退到默认映射。
-        """
-        if self.api_key_env:
-            key = os.environ.get(self.api_key_env, "")
-            if not key:
-                raise ValueError(f"环境变量 '{self.api_key_env}' 未设置，请在 .env 中配置")
-            return key
-        provider_env = {
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "google": "GOOGLE_API_KEY",
-        }
-        env_var = provider_env.get(self.provider, f"{self.provider.upper()}_API_KEY")
-        key = os.environ.get(env_var, "")
-        if not key:
-            raise ValueError(
-                f"未找到 provider '{self.provider}' 的 API key，"
-                f"请在 .env 中设置或在 agent.yaml 中配置 model.api_key_env"
-            )
-        return key
+        """从环境变量读取 API key，无需 Settings 对象。"""
+        return _lookup_api_key(self.provider, self.api_key_env)
 
 
 class ReasoningConfig(BaseModel):
@@ -83,6 +86,7 @@ class MemoryConfig(BaseModel):
     consolidation_cron: str = "0 4 * * *"
     log_retention_days: int = 30
     l0_max_lines: int = 100
+    history_max_chars: int = 2000   # 多轮对话历史单条消息最大字符数
 
 
 class ToolsConfig(BaseModel):
@@ -134,16 +138,16 @@ class AgentConfig(BaseModel):
     """Agent 运行配置"""
 
     name: str = "Sunday"
-    workspace_dir: Path = Path("~/.sunday/workspace")
-    sessions_dir: Path = Path("~/.sunday/sessions")
-    report_dir: Path = Path("~/.sunday/reports")
+    workspace_dir: Path = Path("~/.sunday/workspace")   # L0：用户静态配置
+    memory_dir: Path = Path("~/.sunday/memory")         # L1+L2：AI 维护的动态记忆
+    sessions_dir: Path = Path("~/.sunday/sessions")     # L3：会话详细记录（reports 子目录在此下）
     log_dir: Path = Path("~/.sunday/logs")
 
     def model_post_init(self, __context: Any) -> None:
         # 展开 ~ 路径
         self.workspace_dir = Path(os.path.expanduser(self.workspace_dir))
+        self.memory_dir = Path(os.path.expanduser(self.memory_dir))
         self.sessions_dir = Path(os.path.expanduser(self.sessions_dir))
-        self.report_dir = Path(os.path.expanduser(self.report_dir))
         self.log_dir = Path(os.path.expanduser(self.log_dir))
 
 
@@ -217,28 +221,8 @@ class Settings(BaseSettings):
         return SundayConfig(**raw)
 
     def get_api_key(self, provider: str, api_key_env: str | None = None) -> str:
-        """获取指定 provider 的 API key，找不到时抛出 ValueError。
-
-        优先使用 api_key_env 指定的环境变量名（来自 agent.yaml model.api_key_env），
-        未指定时回退到按 provider 名称的默认映射。
-        """
-        if api_key_env:
-            key = os.environ.get(api_key_env, "")
-            if not key:
-                raise ValueError(f"环境变量 '{api_key_env}' 未设置，请在 .env 中配置")
-            return key
-        key_map = {
-            "anthropic": self.anthropic_api_key,
-            "openai": self.openai_api_key,
-            "google": self.google_api_key,
-        }
-        key = key_map.get(provider, "")
-        if not key:
-            raise ValueError(
-                f"未找到 provider '{provider}' 的 API key，"
-                f"请在 .env 中设置 {provider.upper()}_API_KEY 或在 agent.yaml 中配置 model.api_key_env"
-            )
-        return key
+        """获取指定 provider 的 API key，找不到时抛出 ValueError。"""
+        return _lookup_api_key(provider, api_key_env)
 
 
 settings = Settings()

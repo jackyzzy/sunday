@@ -21,11 +21,32 @@ Sunday 是一个本地优先的个人边端 AI 智能体，运行在用户个人
 - 技能指令 → `skills/*/SKILL.md`，**不得内嵌在 Python 代码中**
 - 配置通过 `src/sunday/config.py`（Pydantic Settings）统一加载
 
-### 记忆系统（文件优先）
-- 不引入任何新的存储组件（Redis、向量数据库等），所有记忆使用文件系统
-- 工作区路径：`~/.sunday/workspace/`（生产）或 `./workspace/`（开发）
-- 记忆层级：`SOUL.md`（永久）→ `MEMORY.md`（长期）→ `memory/YYYY-MM-DD.md`（每日）→ 会话 JSONL（临时）
-- 上下文注入顺序严格按照 L0→L1→L2 优先级
+### 记忆系统（文件优先，四层分级）
+
+不引入任何新的存储组件（Redis、向量数据库等），所有记忆使用文件系统。
+
+**记忆四层架构**：
+
+| 层级 | 路径 | 内容 | 维护者 |
+|------|------|------|--------|
+| **L0 永久层** | `~/.sunday/workspace/SOUL.md`、`AGENTS.md`、`TOOLS.md` | Agent 身份、规则、工具约定 | 用户手动 |
+| **L1 长期层** | `~/.sunday/memory/MEMORY.md`、`USER.md` | 跨会话事实摘要、用户画像 | AI 写入 |
+| **L2 每日层** | `~/.sunday/memory/daily/YYYY-MM-DD.md` | 每日摘要（30天 TTL）| AI 写入 |
+| **L3 会话层** | `~/.sunday/sessions/{id}/` | 完整对话（meta/stream/turns）| 自动记录 |
+
+**开发工作区**：项目根目录 `workspace/` 存放模板文件（SOUL.md 等），实际运行数据在 `~/.sunday/`
+
+**上下文注入顺序**：`L0 → L1 → L2（today/yesterday）→ L3（当前 session 历史轮次）→ task`
+
+**Session 目录结构**（每 session 一个子目录）：
+```
+~/.sunday/sessions/{id}/
+├── meta.json           # 会话元数据（turn_count、turns 索引）
+├── stream.jsonl        # 原始事件流（含 turn_id，append-only）
+└── turns/{turn_id}.json   # 每轮：user_input + plan + execution + output
+```
+
+**Memory 服务边界**：Session = prompt 编排层（agent 侧）；Memory = 存储接口（存储侧，未来可服务化为独立 MemoryStore Protocol）
 
 ### Agent 执行循环（两层 Team 架构，不可破坏的顺序）
 

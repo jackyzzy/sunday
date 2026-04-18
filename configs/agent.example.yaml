@@ -1,0 +1,51 @@
+# agent.example.yaml — 各 provider 配置示例，复制对应 model 块到 agent.yaml 启用
+
+# ── Anthropic ────────────────────────────────────────────────────────────────
+# model:
+#   provider: anthropic
+#   id: claude-opus-4-5
+#   temperature: 0.2
+#   max_tokens: 8192
+
+# ── DeepSeek ─────────────────────────────────────────────────────────────────
+# model:
+#   provider: openai
+#   id: deepseek-chat
+#   temperature: 0.2
+#   max_tokens: 8192
+#   base_url: https://api.deepseek.com/v1
+#   api_key_env: DEEPSEEK_API_KEY
+
+# ── Qwen（阿里云 DashScope）─────────────────────────────────────────────────
+# model:
+#   provider: openai
+#   id: qwen-max
+#   temperature: 0.2
+#   max_tokens: 8192
+#   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+#   api_key_env: QWEN_API_KEY
+
+# ── Moonshot ─────────────────────────────────────────────────────────────────
+# model:
+#   provider: openai
+#   id: moonshot-v1-8k
+#   temperature: 0.2
+#   max_tokens: 8192
+#   base_url: https://api.moonshot.cn/v1
+#   api_key_env: MOONSHOT_API_KEY
+
+# ── Ollama（本地，无需 key）─────────────────────────────────────────────────
+# model:
+#   provider: openai
+#   id: llama3.2
+#   temperature: 0.2
+#   max_tokens: 8192
+#   base_url: http://localhost:11434/v1
+#   api_key_env: null
+
+# ── Google Gemini ─────────────────────────────────────────────────────────────
+# model:
+#   provider: google
+#   id: gemini-2.0-flash
+#   temperature: 0.2
+#   max_tokens: 8192

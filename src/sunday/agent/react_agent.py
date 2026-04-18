@@ -13,7 +13,7 @@
 - __init__ 只需传 config，所有子组件在构造时自动初始化（无需外部注入）
 - _create_node() 实现配置驱动的节点工厂，支持 clone ToolRegistry 后叠加专属技能
 - 各阶段提取为独立方法（plan/execute/evaluate/replan），职责清晰
-- memory 相关操作封装为 inject_memory_context / consolidate_memory / _build_step_context
+- memory 相关操作封装为 inject_memory_context / consolidate_memory
 """
 from __future__ import annotations
 
@@ -77,8 +77,9 @@ class ReactAgent:
         self.planner = Planner(config)
         self.verifier = Verifier(config)
 
-        # Memory 接口（Phase 3 已实现）
+        # Memory 接口（L0 workspace_dir，L1+L2 memory_dir）
         workspace_dir = config.agent.workspace_dir
+        memory_dir = config.agent.memory_dir
         skills_dir = workspace_dir.parent.parent / "skills"
         skill_loader = SkillLoader(
             project_skills_dir=skills_dir,
@@ -86,16 +87,59 @@ class ReactAgent:
         )
         skill_loader.discover()
         self.context_builder: ContextBuilder = ContextBuilder(
-            workspace_dir, skill_loader=skill_loader, config=config
+            workspace_dir, skill_loader=skill_loader, config=config,
+            memory_dir=memory_dir,
         )
-        self.memory_manager: MemoryManager = MemoryManager(workspace_dir, config=config)
+        self.memory_manager: MemoryManager = MemoryManager(memory_dir, config=config,
+                                                            workspace_dir=workspace_dir)
+
+        # 首次运行时确保 .sunday/ 目录结构和初始文件存在
+        self._ensure_user_dirs(workspace_dir, memory_dir, config)
+
+    @staticmethod
+    def _ensure_user_dirs(workspace_dir: Path, memory_dir: Path, config: "SundayConfig") -> None:
+        """确保运行时目录结构完整，首次运行时从项目模板复制 L0/L1 初始文件。
+
+        这解决了 .sunday 目录为空或首次执行时 L0/L1 文件缺失、sessions 目录不存在的问题。
+        """
+        import shutil
+
+        # 项目模板目录：workspace_dir（.sunday/workspace）上溯两级到项目根，再进 workspace/
+        template_dir = workspace_dir.parent.parent / "workspace"
+
+        # L0：workspace 目录 + 初始配置文件（不覆盖用户已有内容）
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        if template_dir.is_dir():
+            for fname in ("SOUL.md", "AGENTS.md", "TOOLS.md"):
+                dest = workspace_dir / fname
+                src = template_dir / fname
+                if not dest.exists() and src.exists():
+                    shutil.copy2(src, dest)
+                    logger.info("初始化 L0 文件：%s", dest)
+
+        # L1：memory 目录 + 空白 MEMORY.md / USER.md（不覆盖）
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        (memory_dir / "daily").mkdir(parents=True, exist_ok=True)
+        if template_dir.is_dir():
+            for fname in ("MEMORY.md", "USER.md"):
+                dest = memory_dir / fname
+                src = template_dir / fname
+                if not dest.exists() and src.exists():
+                    shutil.copy2(src, dest)
+                    logger.info("初始化 L1 文件：%s", dest)
+
+        # L3：sessions 目录
+        sessions_dir = config.agent.sessions_dir
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        # 其他运行时目录
+        config.agent.log_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 主入口 ───────────────────────────────────────────────────────────────
 
     async def run(self, state: AgentState) -> str:
         """执行完整的 think→plan→execute→verify 循环，返回最终摘要。"""
         from sunday.agent.session_log import SessionLog
-        from sunday.tools.cli_tool import make_session_report_dir
 
         # 每次任务开始时重置文件写入记录，避免跨会话污染
         self.tool_registry._agent_written_files = []
@@ -109,22 +153,25 @@ class ReactAgent:
         log_dir = (self.config.agent.log_dir
                    if getattr(self.config, "agent", None) and self.config.agent.log_dir
                    else Path.home() / ".sunday" / "logs")
-        session_log = SessionLog(log_dir, state.session_id)
-        session_log.log_start(state.task, state.thinking_level.value, self.mode)
+        # gateway 模式下 stream.jsonl 已记录等价内容，跳过 SessionLog 避免双写
+        if self.mode == "gateway":
+            session_log: SessionLog | None = None
+        else:
+            session_log = SessionLog(log_dir, state.session_id)
+            session_log.log_start(state.task, state.thinking_level.value, self.mode)
 
         emit = self.emit
 
         async def logged_emit(sid: str, et: str, d: dict) -> None:
             await emit(sid, et, d)
-            session_log.log(et, d)
+            if session_log:
+                session_log.log(et, d)
 
-        # session report 目录（report_dir 为 None 时跳过写报告）
-        report_dir = (self.config.agent.report_dir
-                      if getattr(self.config, "agent", None) and self.config.agent.report_dir
-                      else None)
+        # session report 目录：sessions/{session_id}/reports/{turn_id}/
+        _sessions_dir = getattr(getattr(self.config, "agent", None), "sessions_dir", None)
         session_report_dir: Path | None = (
-            make_session_report_dir(report_dir, state.task, state.session_id)
-            if report_dir else None
+            _sessions_dir / state.session_id / "reports" / state.turn_id
+            if _sessions_dir and state.turn_id else None
         )
         self.tool_registry.set_report_dir(session_report_dir)
         self.session_report_dir = session_report_dir
@@ -141,7 +188,8 @@ class ReactAgent:
             if not plan.steps:
                 msg = "规划失败：LLM 未能生成有效的执行步骤，请重试或简化任务描述。"
                 logger.warning(msg)
-                session_log.log_end(msg, [])
+                if session_log:
+                    session_log.log_end(msg, [])
                 return msg
             max_steps = self.config.reasoning.max_steps
             if len(plan.steps) > max_steps:
@@ -157,7 +205,7 @@ class ReactAgent:
             })
 
             # EXECUTE + VERIFY
-            summary = await self.execute(state, logged_emit, session_log)
+            summary = await self.execute(state, logged_emit)
 
             await logged_emit(state.session_id, "status", {"status": "idle"})
             self._write_report(session_report_dir, summary, state)
@@ -165,18 +213,21 @@ class ReactAgent:
             # 记忆整合
             await self.consolidate_memory(state)
 
-            session_log.log_end(summary, state.team_results)
+            if session_log:
+                session_log.log_end(summary, state.team_results)
             return summary
 
         except asyncio.CancelledError:
             state.aborted = True
             await emit(state.session_id, "status", {"status": "aborted"})
-            session_log.log_abort()
+            if session_log:
+                session_log.log_abort()
             raise
         except Exception as e:
             logger.exception("ReactAgent 未捕获异常：%s", e)
             await emit(state.session_id, "status", {"status": "error", "message": str(e)})
-            session_log.log_error(e)
+            if session_log:
+                session_log.log_error(e)
             raise
         finally:
             logger.info("ReactAgent 结束，session=%s，Team数=%d",
@@ -188,7 +239,7 @@ class ReactAgent:
         """THINK + PLAN 阶段：调用顶层 Planner 生成 Plan。"""
         return await self.planner.think_and_plan(state)
 
-    async def execute(self, state: AgentState, emit: EmitCallable, session_log) -> str:
+    async def execute(self, state: AgentState, emit: EmitCallable) -> str:
         """EXECUTE + VERIFY 阶段：串行执行所有步骤，含重规划，返回最终评估摘要。"""
         reasoning = self.config.reasoning
         max_replans = reasoning.max_replans
@@ -331,19 +382,6 @@ class ReactAgent:
             logger.debug("记忆整合完成，session=%s", state.session_id)
         except Exception as e:
             logger.warning("记忆整合失败，跳过：%s", e)
-
-    async def _build_step_context(self, step: Step, state: AgentState) -> str:
-        """为子 Agent 构建步骤执行上下文（预留接口，当前未调用）。
-
-        当前逻辑已内联在 Team._build_sub_task() 中；此方法是未来统一上下文构建的入口。
-        TODO(memory): 未来通过 MemoryManager 检索相关记忆替换此方法，
-                      实现跨会话的上下文感知，并在 _create_node() 中注入给子节点。
-        """
-        prev_outputs = [
-            f"- {tr.step_id}: {tr.output[:2000]}"
-            for tr in state.team_results if tr.passed and tr.output
-        ]
-        return "\n".join(prev_outputs) if prev_outputs else ""
 
     # ── 节点工厂（配置驱动） ─────────────────────────────────────────────────
 
