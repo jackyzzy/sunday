@@ -128,6 +128,14 @@ class SlashCommandHandler:
         normalized = args.replace("_", "-")
         self._app.session_id = normalized
         self._app._refresh_info_bar()
+        # 清空聊天区：避免上一个 session 的残留内容误导用户
+        try:
+            from sunday.tui.widgets.chat_log import ChatLog
+            self._app.query_one(ChatLog).clear()
+        except Exception:
+            logger.debug("切换 session 时清空 ChatLog 失败（忽略）")
+        # 异步拉取目标 session 历史（走现有 /history 通道，结果由 Gateway 推回）
+        await self._cmd_history()
         return f"已切换到会话：{normalized}"
 
     async def _cmd_reset(self) -> str:

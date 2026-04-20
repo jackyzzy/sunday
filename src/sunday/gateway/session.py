@@ -205,24 +205,27 @@ class SessionManager:
         turn_path = self._dir / session_id / "turns" / f"{turn_id}.json"
 
         async with self._lock:
-            # 写 turn 文件
-            _atomic_write(turn_path, json.dumps(turn, ensure_ascii=False, indent=2))
-
-            # 更新 meta.json
+            # 更新 meta.json（需先拿到 turn_count，以便回填 turn_index）
             meta_path = self._dir / session_id / "meta.json"
             if meta_path.exists():
                 meta = _read_json(meta_path)
                 meta["last_active"] = turn.get("ts_end", "")
                 meta["turn_count"] = meta.get("turn_count", 0) + 1
+                # 回填 turn["turn_index"]（dict.get 对 None 值不生效，需显式判空）
+                if not turn.get("turn_index"):
+                    turn["turn_index"] = meta["turn_count"]
                 turn_summary = {
                     "turn_id": turn_id,
-                    "turn_index": turn.get("turn_index", meta["turn_count"]),
+                    "turn_index": turn["turn_index"],
                     "ts_start": turn.get("ts_start", ""),
                     "ts_end": turn.get("ts_end", ""),
                     "outcome": turn.get("outcome", ""),
                 }
                 meta.setdefault("turns", []).append(turn_summary)
                 _atomic_write(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+
+            # 写 turn 文件（此时 turn["turn_index"] 已定型）
+            _atomic_write(turn_path, json.dumps(turn, ensure_ascii=False, indent=2))
 
             # 更新 index
             for idx_meta in self._index:
@@ -279,6 +282,63 @@ class SessionManager:
         if not turn_path.exists():
             return None
         return _read_json(turn_path)
+
+    # ── 会话主线（session_thread） ──────────────────────────────────────────
+
+    def get_session_title(self, session_id: str) -> str:
+        """读取 meta.json 的 title 字段。不存在则返回空字符串。"""
+        meta_path = self._dir / session_id / "meta.json"
+        if not meta_path.exists():
+            return ""
+        try:
+            meta = _read_json(meta_path)
+        except Exception:
+            return ""
+        title = meta.get("title", "")
+        return title if isinstance(title, str) else ""
+
+    def get_prior_turn_count(self, session_id: str) -> int:
+        """读取 meta.json 的 turn_count（本 session 已完成的轮数）。
+
+        用于判断"当前是首轮还是有历史"——例如 session_thread 空值回退时，
+        仅当 turn_count > 0（即本轮之前至少有一轮尝试过）才注入 title。
+        """
+        meta_path = self._dir / session_id / "meta.json"
+        if not meta_path.exists():
+            return 0
+        try:
+            meta = _read_json(meta_path)
+        except Exception:
+            return 0
+        count = meta.get("turn_count", 0)
+        return count if isinstance(count, int) else 0
+
+    def get_session_thread(self, session_id: str) -> dict | None:
+        """读取 meta.json 的 session_thread（跨轮主线摘要）。不存在时返回 None。"""
+        meta_path = self._dir / session_id / "meta.json"
+        if not meta_path.exists():
+            return None
+        try:
+            meta = _read_json(meta_path)
+        except Exception:
+            return None
+        thread = meta.get("session_thread")
+        if not isinstance(thread, dict):
+            return None
+        return thread
+
+    async def save_session_thread(self, session_id: str, thread: dict) -> None:
+        """写入 meta.json 的 session_thread 字段（原子替换）。"""
+        meta_path = self._dir / session_id / "meta.json"
+        async with self._lock:
+            if not meta_path.exists():
+                return
+            try:
+                meta = _read_json(meta_path)
+            except Exception:
+                return
+            meta["session_thread"] = thread
+            _atomic_write(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
 
     def list_sessions(self) -> list[dict]:
         """返回所有会话元数据，按 last_active 倒序。兼容旧单文件格式。"""

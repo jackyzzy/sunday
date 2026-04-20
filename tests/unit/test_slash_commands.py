@@ -88,3 +88,28 @@ async def test_unknown_command_returns_error():
     handler, _, _ = _make_handler()
     result = await handler.handle("/unknown_cmd_xyz")
     assert "unknown" in result.lower() or "未知" in result or "error" in result.lower()
+
+
+async def test_session_switch_clears_chat_and_fetches_history():
+    """/session <id> 切换后：清空 ChatLog 并发送 /history 请求。"""
+    from sunday.gateway.protocol import EventType, Message
+
+    ws = MagicMock()
+    ws.send = AsyncMock()
+    app = MagicMock()
+    app.session_id = "old-session"
+    chat_log = MagicMock()
+    chat_log.clear = MagicMock()
+    app.query_one.return_value = chat_log
+
+    handler = SlashCommandHandler(app=app, ws=ws)
+    result = await handler.handle("/session new-session-id")
+
+    assert app.session_id == "new-session-id"
+    chat_log.clear.assert_called_once()
+    # 应发送一条 /history SLASH 消息
+    ws.send.assert_called_once()
+    sent = Message.from_json(ws.send.call_args[0][0])
+    assert sent.type == EventType.SLASH
+    assert sent.data.get("command") == "history"
+    assert "new-session-id" in result

@@ -135,6 +135,44 @@ def _promote_selection_to_clipboard() -> bool:
     return False
 
 
+def _format_history_payload(payload: dict) -> str:
+    """把 /history 的 SLASH_RESULT payload 渲染成多行文本。"""
+    session_id = payload.get("session_id", "")
+    thread = payload.get("session_thread") or {}
+    turns = payload.get("turns") or []
+
+    lines: list[str] = [f"会话 ID：{session_id}"]
+    if thread:
+        summary = thread.get("summary", "")
+        entities = thread.get("key_entities") or []
+        if summary:
+            lines.append(f"主线：{summary}")
+        if entities:
+            lines.append(f"关键实体：{', '.join(entities)}")
+    if not turns:
+        lines.append("")
+        lines.append("（当前会话还没有已完成的 turn）")
+        return "\n".join(lines)
+
+    lines.append(f"共 {len(turns)} 轮：")
+    for t in turns:
+        idx = t.get("turn_index", "?")
+        ts = t.get("ts_start", "")[:19]
+        outcome = t.get("outcome", "")
+        header = f"─ Turn {idx}  [{ts}]"
+        if outcome and outcome != "success":
+            header += f"  ({outcome})"
+        lines.append("")
+        lines.append(header)
+        if t.get("user_input"):
+            lines.append(f"  用户：{t['user_input']}")
+        if t.get("plan_goal"):
+            lines.append(f"  目标：{t['plan_goal']}")
+        if t.get("output"):
+            lines.append(f"  回答：{t['output']}")
+    return "\n".join(lines)
+
+
 class SundayApp(App):
     """Sunday TUI — 5 区布局（Header / ChatLog / StatusBar / InfoBar / InputBar）。"""
 
@@ -317,8 +355,10 @@ class SundayApp(App):
                 if deleted_id and deleted_id == self.session_id:
                     msg += "\n提示：当前会话已被删除，建议使用 /new 创建新会话"
                 chat.add_system_message(msg)
+            elif cmd == "history":
+                chat.add_system_message(_format_history_payload(payload))
             elif msg_text := payload.get("message"):
-                # 通用兜底：trust / reset / history / 未知命令
+                # 通用兜底：trust / reset / 未知命令
                 chat.add_system_message(msg_text)
 
     # ── 输入处理 ──────────────────────────────────────────────────────────

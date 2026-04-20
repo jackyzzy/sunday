@@ -91,6 +91,18 @@ class Message(BaseModel):
     ts: datetime = Field(default_factory=datetime.now)
 
 
+class SessionThread(BaseModel):
+    """会话主线：跨 turn 持续的主题/锚点摘要。
+
+    由 `memory.session_thread.update_session_thread` 每轮结束后增量维护，
+    持久化于 meta.json 的 `session_thread` 字段，用于让 Planner 识别当前任务属于同一主线延续。
+    """
+
+    summary: str = ""
+    key_entities: list[str] = Field(default_factory=list)
+    updated_at_turn: str = ""
+
+
 class TeamResult(BaseModel):
     """Team 执行单个顶层 Step 的结果"""
 
@@ -108,6 +120,7 @@ class AgentState(BaseModel):
     task: str
     turn_id: str = ""  # gateway 由 server 注入；CLI 由 cli.py 生成
     history: list[Message] = Field(default_factory=list)
+    session_thread: SessionThread | None = None  # 跨轮主线摘要，Planner 用于保持主题锚定
     plan: Plan | None = None
     step_results: list[StepResult] = Field(default_factory=list)
     team_results: list[TeamResult] = Field(default_factory=list)

@@ -39,6 +39,10 @@ class ChatLog(Widget):
                 lines.append(str(line))
         return "\n".join(lines)
 
+    def clear(self) -> None:
+        """清空聊天日志（切换 session 时调用）。"""
+        self._log.clear()
+
     def add_user_message(self, content: str) -> None:
         self._log.write(f"[bold cyan][用户][/bold cyan] {content}")
 

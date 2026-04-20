@@ -11,7 +11,13 @@ import httpx
 import websockets
 from websockets.asyncio.server import serve
 
-from sunday.agent.models import AgentState, Message as ConvMessage, ThinkingLevel
+from sunday.agent.models import AgentState, Message as ConvMessage, SessionThread, ThinkingLevel
+from sunday.gateway.continuation import (
+    build_effective_task,
+    is_continuation_cue,
+    resolve_continuation,
+)
+from sunday.gateway.history import extract_conversation
 from sunday.gateway.protocol import EventType, Message
 from sunday.gateway.session import SessionManager
 
@@ -125,6 +131,23 @@ class Gateway:
         # 确保 session 目录存在（TUI 在客户端生成 session_id，Gateway 首次收到时自动创建）
         self._session_mgr.ensure_session(session_id)
 
+        # 连续词（"请继续" / "continue" 等）识别：从本 session 的历史中解析出
+        # 原始任务，改写 effective_task 交给 Planner；空 session 则直接反问。
+        effective_task = content
+        if is_continuation_cue(content):
+            events_for_resolution = self._session_mgr.load_history(
+                session_id, max_events=200
+            )
+            resolution = resolve_continuation(events_for_resolution, content)
+            if resolution.found:
+                effective_task = build_effective_task(resolution)
+            else:
+                await self.emit(session_id, EventType.STATUS, {
+                    "state": "needs_input",
+                    "message": "当前会话还没有可继续的任务，请告诉我要做什么。",
+                })
+                return
+
         # 生成轮次 ID，计算当前轮次序号
         turn_id = uuid.uuid4().hex[:8]
         turn_start_ts = datetime.now(timezone.utc).isoformat()
@@ -141,7 +164,7 @@ class Gateway:
             "output": None,
         }
 
-        # 写 TURN_START + SEND 到 stream
+        # 写 TURN_START + SEND 到 stream（stream 里记录用户真实输入，保留可追溯性）
         await self._session_mgr.append_stream(
             session_id, EventType.TURN_START, {"content": content}, turn_id
         )
@@ -150,14 +173,28 @@ class Gateway:
         )
 
         # 构建 AgentLoop 并异步运行
-        # 读取最近对话历史注入 Planner 上下文
+        # 读取最近对话历史 + 会话主线，注入 Planner 上下文
         recent_events = self._session_mgr.load_history(session_id, max_events=50)
-        history = _extract_conversation(recent_events, max_turns=5)
+        history = extract_conversation(recent_events, max_turns=5)
+        thread_raw = self._session_mgr.get_session_thread(session_id)
+        if not thread_raw and self._session_mgr.get_prior_turn_count(session_id) > 0:
+            # session_thread 为空（首轮全失败、update_session_thread 未触发）时，
+            # 若本 session 已有过至少一轮尝试，用 meta.title 兜底，至少给 Planner
+            # 一条本会话主题的锚点。首轮不注入（title == task，无额外信息）。
+            title = self._session_mgr.get_session_title(session_id)
+            if title:
+                thread_raw = {
+                    "summary": f"本会话主题：{title}",
+                    "key_entities": [],
+                    "updated_at_turn": "",
+                }
+        session_thread = SessionThread(**thread_raw) if thread_raw else None
         try:
             thinking = ThinkingLevel(thinking_raw)
         except ValueError:
             thinking = ThinkingLevel(self._settings.sunday.reasoning.thinking_level)
-        state = AgentState(session_id=session_id, task=content, history=history,
+        state = AgentState(session_id=session_id, task=effective_task, history=history,
+                           session_thread=session_thread,
                            thinking_level=thinking, turn_id=turn_id)
 
         async def run_loop():
@@ -193,6 +230,13 @@ class Gateway:
                     msg = str(e) or type(e).__name__
                     logger.exception("AgentLoop 异常：%s", e)
                 await self.emit(session_id, EventType.ERROR, {"message": msg})
+                # 同步把 ERROR 事件写入 stream.jsonl（L3 history 能看到失败原因）
+                try:
+                    await self._session_mgr.append_stream(
+                        session_id, EventType.ERROR, {"message": msg}, turn_id
+                    )
+                except Exception:
+                    logger.exception("写入 ERROR 事件到 stream 失败（不影响用户）")
             finally:
                 ts_end = datetime.now(timezone.utc).isoformat()
                 turn_buffer["ts_end"] = ts_end
@@ -207,6 +251,14 @@ class Gateway:
                 )
                 # 写结构化 turn 文件
                 await self._session_mgr.write_turn(session_id, turn_buffer)
+                # 增量更新会话主线（失败静默，不影响用户）
+                try:
+                    from sunday.memory.session_thread import update_session_thread
+                    await update_session_thread(
+                        session_id, turn_buffer, self._session_mgr, self._settings.sunday
+                    )
+                except Exception:
+                    logger.exception("update_session_thread 失败（不影响用户）")
                 self._running_tasks.pop(session_id, None)
 
         task = asyncio.create_task(run_loop())
@@ -235,11 +287,15 @@ class Gateway:
                 "sessions": sessions,
             })
         elif command == "history":
-            history = self._session_mgr.load_history(session_id)
+            turns = self._session_mgr.load_history(session_id, group_by_turn=True)
+            thread = self._session_mgr.get_session_thread(session_id)
+            compact_turns = [_compact_turn_for_display(t) for t in turns]
             await self.emit(session_id, EventType.SLASH_RESULT, {
                 "command": "history",
-                "events": history,
-                "message": f"历史记录共 {len(history)} 条事件。",
+                "session_id": session_id,
+                "session_thread": thread,
+                "turns": compact_turns,
+                "message": f"会话 {session_id} 共 {len(compact_turns)} 轮对话。",
             })
         elif command == "trust":
             self._trusted_sessions.add(session_id)
@@ -400,29 +456,39 @@ class Gateway:
         return build_agent_loop(cfg, loop_emit, mode="gateway", confirmation_handler=gw_confirm)
 
 
-def _extract_conversation(events: list[dict], max_turns: int = 5) -> list:
-    """从会话 JSONL 事件流中提取最近 N 轮对话（send + done 配对）。"""
-    messages: list[ConvMessage] = []
-    for ev in events:
-        ev_type = ev.get("type", "")
-        data = ev.get("data", {})
-        if ev_type == "send":
-            content = data.get("content", "")
-            if content:
-                messages.append(ConvMessage(role="user", content=content))
-        elif ev_type == "done":
-            content = data.get("content", "")
-            if content:
-                messages.append(ConvMessage(role="assistant", content=content))
-        elif ev_type == "error":
-            msg = data.get("message", "")
-            if msg:
-                messages.append(ConvMessage(role="assistant", content=f"[执行出错：{msg}]"))
+# 历史提取逻辑已抽到 sunday.gateway.history.extract_conversation（供 CLI 复用）
 
-    # 取最近 max_turns 轮（一轮 = user + assistant），排除当前轮（最后一条 user 消息）
-    # 当前轮的 user 消息已经通过 task 传入，不重复注入
-    if messages and messages[-1].role == "user":
-        messages = messages[:-1]
 
-    # 每轮 2 条消息，取最近 max_turns 轮
-    return messages[-(max_turns * 2):]
+_HISTORY_OUTPUT_LIMIT = 400
+_HISTORY_USER_LIMIT = 200
+_HISTORY_GOAL_LIMIT = 200
+
+
+def _compact_turn_for_display(turn: dict) -> dict:
+    """把 turns/*.json 压缩成 TUI /history 可渲染的扁平字典。
+
+    仅保留 turn_index / ts_start / user_input / plan_goal / output，
+    长字符串以 `……` 截断。
+    """
+    plan = turn.get("plan") or {}
+    plan_goal = plan.get("goal", "") if isinstance(plan, dict) else ""
+    user_input = turn.get("user_input") or ""
+    output = turn.get("output") or ""
+
+    return {
+        "turn_id": turn.get("turn_id", ""),
+        "turn_index": turn.get("turn_index", 0),
+        "ts_start": turn.get("ts_start", ""),
+        "outcome": turn.get("outcome", ""),
+        "user_input": _ellipsize(user_input, _HISTORY_USER_LIMIT),
+        "plan_goal": _ellipsize(plan_goal, _HISTORY_GOAL_LIMIT),
+        "output": _ellipsize(output, _HISTORY_OUTPUT_LIMIT),
+    }
+
+
+def _ellipsize(text: str, limit: int) -> str:
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "……"

@@ -4,6 +4,7 @@ import signal
 import subprocess
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -47,12 +48,15 @@ def tui(port):
               help="思考深度")
 @click.option("--model", "-m", default=None, help="临时指定模型（格式：provider/model-id）")
 @click.option("--yes", "-y", is_flag=True, default=False, help="自动确认所有危险操作（跳过交互提示）")
-def run(task, thinking, model, yes):
+@click.option("--session", "session_id", default=None,
+              help="复用已有会话 ID（多轮延续）；不指定则新建")
+def run(task, thinking, model, yes, session_id):
     """执行单次任务（非交互模式）"""
-    asyncio.run(_run_task(task, thinking, model, yes))
+    asyncio.run(_run_task(task, thinking, model, yes, session_id))
 
 
-async def _run_task(task: str, thinking: str, model_override: str | None, yes: bool = False):
+async def _run_task(task: str, thinking: str, model_override: str | None,
+                    yes: bool = False, session_id: str | None = None):
     """实际执行任务的异步函数（Phase 4：接入工具系统与技能）"""
     from sunday.agent.models import AgentState, ThinkingLevel
     from sunday.bootstrap import build_agent_loop
@@ -88,7 +92,10 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
         click.echo("请检查 .env 文件中的 API key 配置", err=True)
         raise SystemExit(1)
 
-    # emit 回调：打印进度到 stdout
+    # turn_buffer 与 Gateway 对齐，承载 plan/execution/output
+    turn_buffer: dict = {}
+
+    # emit 回调：打印进度到 stdout；同时填充 turn_buffer，让 turn 文件与 thread 更新可用
     async def cli_emit(session_id: str, event_type: str, data: dict) -> None:
         if event_type == "status":
             status = data.get("status", "")
@@ -101,6 +108,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
             elif status == "summarizing":
                 click.echo("[生成摘要...]")
         elif event_type == "plan":
+            turn_buffer["plan"] = dict(data)
             goal = data.get("goal", "")
             steps = data.get("steps", [])
             click.echo(f"\n计划：{goal}")
@@ -108,6 +116,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
                 click.echo(f"  [ ] {s['id']}: {s['intent']}")
             click.echo("")
         elif event_type == "step_result":
+            turn_buffer.setdefault("execution", []).append(dict(data))
             step_id = data.get("step_id", "")
             status = data.get("status", "")
             verified = data.get("verified")
@@ -118,18 +127,45 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
                 click.echo(f"  {icon} {step_id}{suffix}")
 
     try:
+        from sunday.gateway.history import extract_conversation
         from sunday.gateway.session import SessionManager
+        from sunday.agent.models import SessionThread
 
         cfg = cfg_settings.sunday  # SundayConfig
         level = ThinkingLevel(thinking)
 
-        # 通过 SessionManager 创建规范的 session 目录（L3），保持 CLI/TUI 一致性
+        # 通过 SessionManager 创建或复用 session 目录（L3），保持 CLI/TUI 一致性
         session_mgr = SessionManager(cfg.agent.sessions_dir)
-        session_id = session_mgr.new_session()
+        if session_id:
+            session_mgr.ensure_session(session_id)
+        else:
+            session_id = session_mgr.new_session()
         turn_id = uuid.uuid4().hex[:8]
+        turn_start_ts = datetime.now(timezone.utc).isoformat()
+
+        # 读取历史与主线（与 Gateway 一致）
+        recent_events = session_mgr.load_history(session_id, max_events=50)
+        history = extract_conversation(recent_events, max_turns=5)
+        thread_raw = session_mgr.get_session_thread(session_id)
+        session_thread = SessionThread(**thread_raw) if thread_raw else None
+
+        turn_buffer.update({
+            "turn_id": turn_id,
+            "turn_index": None,
+            "ts_start": turn_start_ts,
+            "ts_end": None,
+            "outcome": None,
+            "user_input": task,
+            "plan": None,
+            "execution": [],
+            "output": None,
+        })
+
         state = AgentState(
             session_id=session_id,
             task=task,
+            history=history,
+            session_thread=session_thread,
             thinking_level=level,
             turn_id=turn_id,
         )
@@ -153,16 +189,38 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
         from sunday.gateway.protocol import EventType
         from sunday.tools.cli_tool import format_report_footer
 
-        # 写 SEND 到 stream（任务执行前）
-        await session_mgr.append_stream(session_id, EventType.SEND, {"content": task})
+        # 写 TURN_START + SEND 到 stream（任务执行前）
+        await session_mgr.append_stream(
+            session_id, EventType.TURN_START, {"content": task}, turn_id=turn_id
+        )
+        await session_mgr.append_stream(
+            session_id, EventType.SEND, {"content": task}, turn_id=turn_id
+        )
 
         loop = build_agent_loop(cfg, cli_emit, mode="cli", confirmation_handler=cli_confirm)
         result = ""
+        outcome = "error"
         try:
             result = await loop.run(state) or ""
+            outcome = "success"
         finally:
-            # 无论成功还是异常，都写 DONE 到 stream（保持 L3 完整性）
-            await session_mgr.append_stream(session_id, EventType.DONE, {"content": result})
+            # 无论成功还是异常，都写 DONE + TURN_END + turn 文件，保持 L3 完整性
+            turn_buffer["output"] = result
+            turn_buffer["outcome"] = outcome
+            turn_buffer["ts_end"] = datetime.now(timezone.utc).isoformat()
+            await session_mgr.append_stream(
+                session_id, EventType.DONE, {"content": result}, turn_id=turn_id
+            )
+            await session_mgr.append_stream(
+                session_id, EventType.TURN_END, {"outcome": outcome}, turn_id=turn_id
+            )
+            await session_mgr.write_turn(session_id, turn_buffer)
+            # 增量更新会话主线（失败静默）
+            try:
+                from sunday.memory.session_thread import update_session_thread
+                await update_session_thread(session_id, turn_buffer, session_mgr, cfg)
+            except Exception as thread_err:
+                click.echo(f"[警告] 会话主线更新失败：{thread_err}", err=True)
 
         click.echo("\n" + "─" * 50)
         click.echo(result)
@@ -170,6 +228,7 @@ async def _run_task(task: str, thinking: str, model_override: str | None, yes: b
         footer = format_report_footer(result, report_path)
         if footer:
             click.echo(footer)
+        click.echo(f"\n会话 ID：{session_id}（复用：sunday run --session {session_id} ...）")
     except Exception as e:
         import httpx
         if isinstance(e, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):

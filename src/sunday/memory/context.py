@@ -79,7 +79,11 @@ class ContextBuilder:
         # 2. AGENTS.md
         self._add_file(parts, self.workspace_dir / "AGENTS.md")
 
-        # ── L1：AI 长期摘要 ─────────────────────────────────────────────
+        # ── L1 + L2：AI 长期摘要 + 每日摘要 ────────────────────────────
+        # 使用临时列表累积 L1/L2 内容，若有任何内容则在前面加一段节标题，
+        # 让 Planner 从结构上识别"这是跨会话背景，不是当前会话的延续"。
+        cross_session_parts: list[str] = []
+
         # 3. MEMORY.md（末尾 l0_max_lines 行）
         memory_path = self.memory_dir / "MEMORY.md"
         if memory_path.exists():
@@ -88,17 +92,20 @@ class ContextBuilder:
             if len(lines) > self.l0_max_lines:
                 content = "\n".join(lines[-self.l0_max_lines:])
             if content.strip():
-                parts.append(content)
+                cross_session_parts.append(content)
         # 4. USER.md
-        self._add_file(parts, self.memory_dir / "USER.md")
+        self._add_file(cross_session_parts, self.memory_dir / "USER.md")
 
-        # ── L2：每日摘要 ────────────────────────────────────────────────
         # 5. 昨日日志
         yesterday = (date.today() - timedelta(days=1)).isoformat()
-        self._add_file(parts, self._daily_dir / f"{yesterday}.md")
+        self._add_file(cross_session_parts, self._daily_dir / f"{yesterday}.md")
         # 6. 今日日志
         today = date.today().isoformat()
-        self._add_file(parts, self._daily_dir / f"{today}.md")
+        self._add_file(cross_session_parts, self._daily_dir / f"{today}.md")
+
+        if cross_session_parts:
+            parts.append("# 跨会话长期背景（仅供参考，非当前会话历史）")
+            parts.extend(cross_session_parts)
 
         # ── 其他 ────────────────────────────────────────────────────────
         # 7. 技能摘要（可选）

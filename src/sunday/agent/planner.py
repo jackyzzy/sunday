@@ -15,6 +15,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _truncate_head_tail(content: str, limit: int) -> str:
+    """长文本保留首尾各半，避免主题句丢失在中间。"""
+    if len(content) <= limit:
+        return content
+    half = max(limit // 2, 200)
+    return f"{content[:half]}\n...[中间省略]...\n{content[-half:]}"
+
+
 class Planner:
     """负责 THINK + PLAN + DECOMPOSE 阶段。
 
@@ -50,18 +58,30 @@ class Planner:
 
         task_context = f"{self.system_prompt}\n\n---\n\n" if self.system_prompt else ""
 
+        # 注入会话主线（跨轮主题锚点）
+        thread_context = ""
+        thread = state.session_thread
+        if thread and (thread.summary or thread.key_entities):
+            entities = "、".join(thread.key_entities) if thread.key_entities else "（无）"
+            summary = thread.summary or "（尚未形成明确主线）"
+            thread_context = (
+                f"# 会话主线\n"
+                f"主题概括：{summary}\n"
+                f"关键实体：{entities}\n\n---\n\n"
+            )
+
         # 注入对话历史（让 Planner 区分新任务/续任务）
         history_context = ""
         if state.history:
             limit = self.config.memory.history_max_chars
             history_lines = "\n".join(
-                f"{m.role}: {m.content[:limit]}..." if len(m.content) > limit else f"{m.role}: {m.content}"
+                f"{m.role}: {_truncate_head_tail(m.content, limit)}"
                 for m in state.history[-10:]
             )
-            history_context = f"对话历史：\n{history_lines}\n\n---\n\n"
+            history_context = f"# 对话历史\n{history_lines}\n\n---\n\n"
 
         active_prompt = plan_prompt if plan_prompt is not None else self._get_plan_prompt()
-        prompt = task_context + history_context + active_prompt.format(task=state.task)
+        prompt = task_context + thread_context + history_context + active_prompt.format(task=state.task)
 
         response = await LLMClient.call(
             model_cfg,
