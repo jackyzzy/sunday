@@ -14,12 +14,20 @@ Sunday 是一个本地优先的个人边端 AI 智能体，运行在用户个人
 
 ## 架构原则
 
-### 配置与实现分离（强制）
-- API key、模型 ID、温度等参数 → `.env` 或 `configs/agent.yaml`，**不得硬编码**
-- 角色定义、系统提示 → `configs/prompts/*.md`
-- 任务定义 → `configs/agent.yaml` 的 `tasks` 节
-- 技能指令 → `skills/*/SKILL.md`，**不得内嵌在 Python 代码中**
+### 配置 / 运行数据 / 代码 三向分离（强制）
+
+| 类型 | 位置 | 内容 | 谁维护 |
+|------|------|------|--------|
+| **代码** | `src/sunday/` | 行为/算法本身 | 开发者 |
+| **配置** | `.env`、`configs/agent.yaml` | API key、模型 ID、`enabled` 开关、checker 选择 | 用户初次配 |
+| **角色 / 提示** | `configs/prompts/*.md` | 系统提示、计划模板 | 开发者 + 用户 |
+| **任务模板** | `configs/agent.yaml` 的 `tasks` 节 | 预置任务流 | 用户 |
+| **技能** | `skills/*/SKILL.md` + `*.py` | 工具实现（不得内嵌在代码里）| 用户/开发者 |
+| **运行数据** | `workspace/RUNTIME_RULES.md` (L0)、`memory/MEMORY.md` (L1) | 关键词清单、阈值、用户偏好 | 用户手编 + AI 学习 |
+
+- 不得硬编码 API key、模型名、关键词清单等可变数据
 - 配置通过 `src/sunday/config.py`（Pydantic Settings）统一加载
+- 关键词、阈值这类"可演化的内容"放在 [workspace/RUNTIME_RULES.md](workspace/RUNTIME_RULES.md) 而非 `agent.yaml`，由 [src/sunday/memory/runtime_rules.py](src/sunday/memory/runtime_rules.py) 解析；不同 sunday 实例可有自己的规则集
 
 ### 记忆系统（文件优先，四层分级）
 
@@ -29,7 +37,7 @@ Sunday 是一个本地优先的个人边端 AI 智能体，运行在用户个人
 
 | 层级 | 路径 | 内容 | 维护者 |
 |------|------|------|--------|
-| **L0 永久层** | `~/.sunday/workspace/SOUL.md`、`AGENTS.md`、`TOOLS.md` | Agent 身份、规则、工具约定 | 用户手动 |
+| **L0 永久层** | `~/.sunday/workspace/SOUL.md`、`AGENTS.md`、`TOOLS.md`、`RUNTIME_RULES.md` | Agent 身份、规则、工具约定、运行规则（关键词/阈值）| 用户手动 + AI 追加 |
 | **L1 长期层** | `~/.sunday/memory/MEMORY.md`、`USER.md` | 跨会话事实摘要、用户画像 | AI 写入 |
 | **L2 每日层** | `~/.sunday/memory/daily/YYYY-MM-DD.md` | 每日摘要（30天 TTL）| AI 写入 |
 | **L3 会话层** | `~/.sunday/sessions/{id}/` | 完整对话（meta/stream/turns）| 自动记录 |
@@ -51,16 +59,24 @@ Sunday 是一个本地优先的个人边端 AI 智能体，运行在用户个人
 ### Agent 执行循环（两层 Team 架构，不可破坏的顺序）
 
 **外层 AgentLoop（编排层）：**
-THINK → PLAN（顶层步骤分解）→ 按依赖顺序驱动各 Team → EVALUATE（汇总评估）→ 记忆更新
+THINK → REALTIME_HINTS → (opt-in FACT_CHECK) → PLAN（每步带 `requires_realtime_data`）→ 按依赖顺序驱动各 Team → EVALUATE（汇总评估）→ 记忆更新
 
 **内层 Team（执行层，每个顶层 Step 独立一个 Team）：**
-SUB-PLAN（1~3 个子步骤）→ EXECUTE（ReAct 工具调用）→ VERIFY（逐子步验证）
+SUB-PLAN（1~3 个子步骤，继承父 step 的 realtime 标记）→ EXECUTE（ReAct；realtime 步骤强制联网或打"⚠ 未联网"标签）→ VERIFY（基础 verify + 主题一致性 + 工具使用审计）
+
+**Plan 阶段保持纯粹（默认）**：
+- THINK 是 LLM-only（识别不确定断言），不调外部工具
+- REALTIME_HINTS 是纯函数信号聚合（关键词读自 `workspace/RUNTIME_RULES.md`）
+- FACT_CHECK 默认关（`config.quality.fact_check.enabled=false`），仅当用户对 L1/L2 跨会话记忆污染敏感时手动开
+- 实时数据获取统一在 Execution 阶段做，由 `Step.requires_realtime_data` 显式驱动
 
 规则：
 - 不得跳过 VERIFY 步骤（内外两层均适用）
-- 不得在 PLAN 阶段调用外部工具
+- 默认 PLAN 阶段不调外部工具；opt-in 后 FACT_CHECK 才调白名单工具（默认 `web_search` / `read_file`），预算 `max_tool_calls=2` + `timeout_seconds=10`
 - Team 共享顶层 ToolRegistry，不重复创建
-- 顶层评估用 `Verifier.evaluate()`，子步骤验证用 `Verifier.check()`
+- 每个 Step 有 `requires_realtime_data: bool`：Planner 决策（三信号 — 关键词 + think 实体 + plan LLM 自判）→ Executor 遵守（system prompt 注入约束 + 代码兜底打标）→ Verifier 审计（未联网且无标签 → failed + replan）
+- 顶层评估用 `Verifier.evaluate()`，子步骤验证用 `Verifier.check()`；`Verifier.check()` 三层闸门：基础 verify → 主题一致性（`subject_consistency`，可关）→ 工具使用审计（`tool_usage_audit`，可关）
+- "最终汇总/整合"类步骤的 Executor system prompt 自动追加主题锚定段（`config.quality.final_step_anchor`，可关）
 
 ### 工具安全原则
 - 所有不可逆操作（删除文件、发送邮件、git push）必须向用户确认后执行
@@ -153,7 +169,9 @@ Shell 工具：`.sh` 文件头部加 YAML frontmatter 注释（`# ---` 包裹 na
 | 事件 | 关键字段 | 说明 |
 |------|---------|------|
 | `session_start` | task, thinking_level, mode | 任务开始 |
-| `plan` | goal, steps[]{id,intent,criteria} | 顶层计划，每步含意图 |
+| `plan_realtime_hints` | phase, task_keywords, claim_entities | Planner 聚合的实时性提示信号（仅有信号时 emit）|
+| `plan_fact_check` | phase, claims/facts | FACT_CHECK 子阶段（默认关；opt-in 后才会出现）|
+| `plan` | goal, steps[]{id,intent,criteria,requires_realtime_data} | 顶层计划，每步含意图与实时性标注 |
 | `step_start` | step_id, intent, node_type | 步骤开始，含执行节点类型(team/simple) |
 | `sub_step_result` | parent_step_id, sub_step_id, verified, verify_reason | Team 内每个子步骤结果 |
 | `step_result` | step_id, status, verified, verify_reason, duration_ms | 顶层步骤完成 |

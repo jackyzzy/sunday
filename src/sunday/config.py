@@ -121,6 +121,86 @@ class SkillsConfig(BaseModel):
     extra_dirs: list[str] = Field(default_factory=list)
 
 
+class FactCheckConfig(BaseModel):
+    """规划阶段事实核查子阶段配置（opt-in）。
+
+    默认关闭：Plan 阶段保持纯粹（仅 LLM 推理），实时数据获取由 Execution 阶段
+    通过 Step.requires_realtime_data 驱动。仅当用户对 L1/L2 跨会话记忆污染
+    敏感、需要 Plan 时主动联网核实时才开启。
+    """
+
+    enabled: bool = False
+    max_tool_calls: int = 2
+    timeout_seconds: int = 10
+    allowed_tools: list[str] = Field(default_factory=lambda: ["web_search", "read_file"])
+
+
+class SubjectConsistencyConfig(BaseModel):
+    """验证阶段主题一致性检查配置"""
+
+    enabled: bool = True
+    checker: str = "llm"  # llm | keyword | small_model（未来）
+
+
+class FinalStepAnchorConfig(BaseModel):
+    """最终步骤输出锚定到当前任务主题的配置"""
+
+    enabled: bool = True
+    intent_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "整合", "总结", "汇总", "最终", "综合", "清单", "建议", "报告",
+        ]
+    )
+
+
+class RealtimeHintsConfig(BaseModel):
+    """实时数据需求识别配置（think 阶段 + 关键词聚合）。
+
+    enabled=true 时 Planner 在 plan 前会跑一次轻量 think LLM 调用识别不确定
+    断言，并结合任务文本关键词聚合为 hints，注入 plan prompt 让 LLM 为
+    每个 step 标注 requires_realtime_data。
+    """
+
+    enabled: bool = True
+
+
+class OfflineOutputLabelConfig(BaseModel):
+    """Executor 未联网兜底打标配置。
+
+    enabled=true 时，对 requires_realtime_data=True 的 step，若实际未成功
+    调用 web_search/fetch_url，则自动给输出 prepend "⚠ 未联网" 标签。
+    """
+
+    enabled: bool = True
+
+
+class ToolUsageAuditConfig(BaseModel):
+    """Verifier 工具使用审计配置。
+
+    enabled=true 时，对 requires_realtime_data=True 的 step：若既未成功
+    联网也未带未联网标签 → Verifier 判 failed，触发 replan。
+    """
+
+    enabled: bool = True
+
+
+class QualityConfig(BaseModel):
+    """质量控制开关：事实核查 / 主题一致性 / 最终步骤锚定 / 实时性识别 / 未联网打标 / 工具审计"""
+
+    fact_check: FactCheckConfig = Field(default_factory=FactCheckConfig)
+    subject_consistency: SubjectConsistencyConfig = Field(
+        default_factory=SubjectConsistencyConfig
+    )
+    final_step_anchor: FinalStepAnchorConfig = Field(
+        default_factory=FinalStepAnchorConfig
+    )
+    realtime_hints: RealtimeHintsConfig = Field(default_factory=RealtimeHintsConfig)
+    offline_output_label: OfflineOutputLabelConfig = Field(
+        default_factory=OfflineOutputLabelConfig
+    )
+    tool_usage_audit: ToolUsageAuditConfig = Field(default_factory=ToolUsageAuditConfig)
+
+
 class NodeConfig(BaseModel):
     """单个执行节点的专属配置（可选，未配置则使用全局默认）。
 
@@ -168,6 +248,7 @@ class SundayConfig(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
     tasks: dict[str, TaskConfig] = Field(default_factory=dict)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)  # step.id → 节点专属配置
 

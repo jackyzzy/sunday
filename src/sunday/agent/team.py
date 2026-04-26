@@ -157,12 +157,18 @@ class Team:
 
     @staticmethod
     def _build_sub_task(step: Step, parent_state: AgentState) -> str:
-        """组装子任务描述，注入期望输出、成功标准和前序上下文。"""
+        """组装子任务描述，注入期望输出、成功标准、前序上下文和实时性继承提示。"""
         parts = [step.intent]
         if step.expected_output:
             parts.append(f"期望输出：{step.expected_output}")
         if step.success_criteria:
             parts.append(f"成功标准：{step.success_criteria}")
+        if step.requires_realtime_data:
+            parts.append(
+                "【父步骤实时性】父步骤已被标记为 requires_realtime_data=true，"
+                "凡涉及具体事实陈述的子步骤都应继承该标记（除非该子步骤仅做"
+                "基于已搜回数据的整合/写作）。"
+            )
 
         prev_outputs = [
             f"- {tr.step_id} 的输出：{tr.output[:5000]}"

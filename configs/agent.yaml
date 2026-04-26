@@ -41,6 +41,39 @@ mcp:
 skills:
   extra_dirs: []
 
+# 质量控制开关 — 保留开关便于以后在性能/成本层做取舍
+# 注：关键词清单等"运行数据"在 workspace/RUNTIME_RULES.md（L0），不在此文件
+quality:
+  fact_check:
+    enabled: false                   # 默认关：Plan 阶段保持纯粹（仅 LLM 推理，不调工具）
+                                     # 仅当需要在 plan 时联网核实跨会话记忆时才开
+    max_tool_calls: 2
+    timeout_seconds: 10
+    allowed_tools:
+      - web_search
+      - read_file
+  subject_consistency:
+    enabled: true                    # 验证阶段主题一致性检查
+    checker: llm                     # llm | keyword | small_model（未来预留）
+  final_step_anchor:
+    enabled: true                    # 最终步骤输出锚定当前任务主题
+    intent_keywords:                 # 命中任一关键词即视为"最终汇总步骤"
+      - 整合
+      - 总结
+      - 汇总
+      - 最终
+      - 综合
+      - 清单
+      - 建议
+      - 报告
+  realtime_hints:
+    enabled: true                    # 在 plan 前聚合"实时数据需求"信号注入 plan prompt
+                                     # 关键词清单读自 workspace/RUNTIME_RULES.md
+  offline_output_label:
+    enabled: true                    # Executor 未联网兜底打标
+  tool_usage_audit:
+    enabled: true                    # Verifier 工具使用审计闸门
+
 # nodes:                         # 可选：为特定 step 定义专属节点配置（以 step.id 为 key）
 #   search_web:                  # 匹配 step.id == "search_web" 的步骤
 #     type: team                 # auto（默认，由 step.is_simple 决定）| team | simple

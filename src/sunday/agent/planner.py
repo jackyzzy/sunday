@@ -1,13 +1,27 @@
-"""Phase 2/3：Planner — THINK + PLAN + DECOMPOSE（支持注入 system_prompt）"""
+"""Phase 2/3：Planner — THINK + (opt-in) FACT_CHECK + REALTIME_HINTS + PLAN + DECOMPOSE。
+
+阶段调用链（默认 fact_check.enabled=false、realtime_hints.enabled=true）：
+
+    THINK（LLM-only，识别不确定断言）
+        ↓
+    [opt-in] FACT_CHECK（白名单工具核实，默认关）
+        ↓
+    REALTIME_HINTS（纯函数，复用 think 的 claims）
+        ↓
+    PLAN（注入 facts + hints，要求 LLM 标注每步 requires_realtime_data）
+"""
 from __future__ import annotations
 
 import json
 import logging
 from typing import TYPE_CHECKING
 
+from sunday.agent.fact_check import ToolRegistryLike, VerifiedFact, maybe_fact_check
 from sunday.agent.llm_client import LLMClient
 from sunday.agent.models import THINKING_BUDGET, AgentState, Plan, Step, ThinkingLevel
-from sunday.agent.utils import strip_code_fence
+from sunday.agent.realtime_hints import classify, format_for_plan_prompt
+from sunday.agent.utils import EmitCallable, noop_emit, strip_code_fence
+from sunday.gateway.protocol import EventType
 
 if TYPE_CHECKING:
     from sunday.config import ModelConfig, SundayConfig
@@ -35,6 +49,7 @@ class Planner:
         self._plan_prompt: str | None = None
         self._replan_prompt: str | None = None
         self._sub_replan_prompt: str | None = None
+        self._think_prompt: str | None = None
 
     def _get_plan_prompt(self) -> str:
         if self._plan_prompt is None:
@@ -51,10 +66,28 @@ class Planner:
             self._sub_replan_prompt = self.config.load_prompt("sub_replan")
         return self._sub_replan_prompt
 
-    async def think_and_plan(self, state: AgentState, plan_prompt: str | None = None) -> Plan:
-        """根据任务和上下文生成结构化 Plan。"""
+    def _get_think_prompt(self) -> str:
+        if self._think_prompt is None:
+            self._think_prompt = self.config.load_prompt("think")
+        return self._think_prompt
+
+    async def think_and_plan(
+        self,
+        state: AgentState,
+        plan_prompt: str | None = None,
+        tool_registry: ToolRegistryLike | None = None,
+        emit: EmitCallable | None = None,
+    ) -> Plan:
+        """根据任务和上下文生成结构化 Plan。
+
+        若 config.quality.fact_check.enabled，并且有 tool_registry 可用，
+        会在正式生成 Plan 前插入一次 FACT_CHECK 子阶段：
+            THINK（识别可疑事实）→ maybe_fact_check（白名单工具核实）→ PLAN（注入 verified_facts）
+        否则行为与原来完全一致。
+        """
         model_cfg: ModelConfig = self.config.model
         budget = THINKING_BUDGET.get(state.thinking_level, 4096)
+        emit = emit or noop_emit
 
         task_context = f"{self.system_prompt}\n\n---\n\n" if self.system_prompt else ""
 
@@ -80,8 +113,65 @@ class Planner:
             )
             history_context = f"# 对话历史\n{history_lines}\n\n---\n\n"
 
+        # ── THINK 阶段：识别不确定断言（LLM-only，零外部工具）──
+        # 解耦：think 由 realtime_hints OR fact_check 任一启用即触发，结果共享。
+        quality = self.config.quality
+        claims: list[str] = []
+        if quality.realtime_hints.enabled or quality.fact_check.enabled:
+            claims = await self._identify_uncertain_claims(
+                state, thread_context, history_context, model_cfg
+            )
+
+        # ── FACT_CHECK 子阶段（opt-in，默认关）──
+        verified_facts: list[VerifiedFact] = []
+        if quality.fact_check.enabled and claims:
+            await emit(state.session_id, EventType.PLAN_FACT_CHECK, {
+                "phase": "start",
+                "claims": claims,
+            })
+            verified_facts = await maybe_fact_check(
+                claims, self.config, tool_registry, state.session_id
+            )
+            await emit(state.session_id, EventType.PLAN_FACT_CHECK, {
+                "phase": "done",
+                "facts": [
+                    {"claim": f.claim, "tool": f.tool, "finding": f.finding[:300]}
+                    for f in verified_facts
+                ],
+            })
+
+        facts_context = ""
+        if verified_facts:
+            lines = "\n".join(
+                f"- {f.claim}\n  ↳ 来源[{f.tool}]：{f.finding[:300]}"
+                for f in verified_facts
+            )
+            facts_context = (
+                "# 已核实事实（FACT_CHECK 子阶段）\n"
+                "规划时如与历史记忆冲突，以此为准：\n"
+                f"{lines}\n\n---\n\n"
+            )
+
+        # ── REALTIME_HINTS：合成"实时数据需求"提示注入 plan prompt ──
+        hints_context = ""
+        if quality.realtime_hints.enabled:
+            hints = classify(
+                state.task, claims=claims,
+                workspace_dir=self.config.agent.workspace_dir,
+            )
+            if hints.has_signal:
+                await emit(state.session_id, EventType.PLAN_REALTIME_HINTS, {
+                    "phase": "done",
+                    "task_keywords": hints.task_keywords,
+                    "claim_entities": hints.claim_entities,
+                })
+            hints_context = format_for_plan_prompt(hints)
+
         active_prompt = plan_prompt if plan_prompt is not None else self._get_plan_prompt()
-        prompt = task_context + thread_context + history_context + active_prompt.format(task=state.task)
+        prompt = (
+            task_context + thread_context + history_context + facts_context + hints_context
+            + active_prompt.format(task=state.task)
+        )
 
         response = await LLMClient.call(
             model_cfg,
@@ -94,6 +184,49 @@ class Planner:
         plan = self._parse_plan(response.text, thinking=response.thinking)
         logger.info("规划完成，共 %d 个步骤", len(plan.steps))
         return plan
+
+    async def _identify_uncertain_claims(
+        self,
+        state: AgentState,
+        thread_context: str,
+        history_context: str,
+        model_cfg: "ModelConfig",
+    ) -> list[str]:
+        """轻量 LLM 调用：从 task/thread/history 中挑出需核实的事实声明（至多 3 条）。"""
+        try:
+            prompt = self._get_think_prompt().format(
+                task=state.task,
+                thread_context=thread_context,
+                history_context=history_context,
+            )
+        except Exception as e:
+            logger.warning("think 提示构建失败（%s），跳过 FACT_CHECK", e)
+            return []
+
+        try:
+            raw = await LLMClient.call_text(
+                model_cfg, prompt, max_tokens=512, temperature=0, timeout=30
+            )
+        except Exception as e:
+            logger.warning("think 阶段 LLM 调用失败（%s），跳过 FACT_CHECK", e)
+            return []
+
+        text = strip_code_fence(raw)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            logger.info("think 响应非 JSON，跳过 FACT_CHECK，原文：%s", raw[:200])
+            return []
+
+        if not data.get("needs_fact_check", False):
+            return []
+        claims = data.get("claims", []) or []
+        # 规范化 + 截断
+        clean: list[str] = []
+        for c in claims[:3]:
+            if isinstance(c, str) and c.strip():
+                clean.append(c.strip()[:80])
+        return clean
 
     async def replan(self, failed_step: Step, result_output: str, state: AgentState) -> list[Step]:
         """局部重规划：替换 failed_step 之后所有未执行步骤。"""

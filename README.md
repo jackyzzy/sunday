@@ -30,6 +30,7 @@ Sunday 是一个 **本地优先（local-first）** 的个人 AI 智能体。以�
 - **守护进程 + TUI** — Gateway 后台长驻，TUI 随时 attach/detach，不丢失上下文
 - **完整推理循环** — THINK → PLAN → DECOMPOSE → EXECUTE（ReAct）→ VERIFY，不可跳过
 - **持久记忆** — Markdown 文件记忆系统，SOUL / MEMORY / 每日日志分层存储，越用越懂你
+- **实时数据透明化** — Planner 自动判断哪些步骤需要联网；未联网或工具失败时报告会自动打"⚠ 未联网"标签，避免误把陈旧训练数据当事实
 - **不可逆操作保护** — 发邮件、写文件、推代码等操作必须经过用户确认
 - **技能扩展** — SKILL.md 指令包，按需懒加载，不污染上下文
 - **模型无关** — 支持 Anthropic Claude、OpenAI、Google Gemini、本地 Ollama

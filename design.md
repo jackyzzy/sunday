@@ -222,7 +222,7 @@ sunday/
 
 ## 3. 配置系统设计
 
-### 3.1 配置分层
+### 3.1 配置 / 运行数据 / 代码 三向分离
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -230,15 +230,28 @@ sunday/
 │  ANTHROPIC_API_KEY=...  OPENAI_API_KEY=...               │
 │  不提交 git，运行时通过 pydantic-settings 注入             │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 2: 主配置层（configs/agent.yaml）                  │
-│  模型参数、记忆路径、工具策略、MCP 服务器、定时任务         │
-│  提交 git，结构化，Pydantic 验证                           │
+│  Layer 2: 框架配置层（configs/agent.yaml）                │
+│  模型参数、quality.* 开关、checker 实现选择、路径          │
+│  "可执行契约"，提交 git，结构化，Pydantic 验证             │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 3: 工作区层（workspace/*.md）                      │
-│  SOUL.md / AGENTS.md / MEMORY.md / USER.md / TOOLS.md   │
-│  用户直接编辑，智能体运行时读取，部分由智能体写入           │
+│  Layer 3: 提示与任务层（configs/prompts/、tasks 节）       │
+│  系统提示模板、计划/验证 prompt、预置任务流                 │
+├─────────────────────────────────────────────────────────┤
+│  Layer 4: 工作区运行数据层（workspace/*.md）              │
+│  SOUL.md / AGENTS.md / TOOLS.md / RUNTIME_RULES.md      │
+│  "可演化的内容"：身份、规则、关键词清单、阈值；             │
+│  用户编辑 + AI 在特定节追加（如 RUNTIME_RULES.md AI 学习节）│
+├─────────────────────────────────────────────────────────┤
+│  Layer 5: 长期记忆层（memory/*.md）                       │
+│  MEMORY.md / USER.md / daily/                            │
+│  AI 自动写入，跨会话沉淀                                   │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**归属原则**：
+- 框架开关（`enabled: bool`、checker 选哪个实现、超时阈值这类"框架契约"）→ `agent.yaml`
+- 内容数据（关键词、敏感实体白名单、用户偏好阈值）→ `workspace/RUNTIME_RULES.md`
+- 不同 sunday 实例（不同 `~/.sunday/`）通过自己的 RUNTIME_RULES.md 即可拥有不同的判断风格
 
 ### 3.2 配置数据模型
 
@@ -288,6 +301,25 @@ SundayConfig
 ├── skills: SkillsConfig
 │   └── extra_dirs: list[Path]
 │
+├── quality: QualityConfig          ← 行为质量控制开关
+│   ├── fact_check: FactCheckConfig
+│   │   ├── enabled: bool = False    # opt-in；默认 Plan 阶段不调外部工具
+│   │   ├── max_tool_calls: int = 2
+│   │   ├── timeout_seconds: int = 10
+│   │   └── allowed_tools: list[str]
+│   ├── subject_consistency: SubjectConsistencyConfig
+│   │   ├── enabled: bool = True
+│   │   └── checker: str             # llm | keyword | small_model（未来）
+│   ├── final_step_anchor: FinalStepAnchorConfig
+│   │   ├── enabled: bool = True
+│   │   └── intent_keywords: list[str]
+│   ├── realtime_hints: RealtimeHintsConfig
+│   │   └── enabled: bool = True     # 关键词清单读自 workspace/RUNTIME_RULES.md
+│   ├── offline_output_label: OfflineOutputLabelConfig
+│   │   └── enabled: bool = True     # Executor 兜底打"⚠ 未联网"标签
+│   └── tool_usage_audit: ToolUsageAuditConfig
+│       └── enabled: bool = True     # Verifier 第三道闸门
+│
 └── tasks: dict[str, TaskConfig]
     └── schedule, description, prompt, enabled
 ```
@@ -336,7 +368,10 @@ Step                            ← 一个执行单元（顶层 Step 或 Team �
 ├── expected_output: str
 ├── success_criteria: str       ← Verifier 的判断依据
 ├── depends_on: list[str]       ← 依赖的 step id
-└── status: StepStatus          ← PENDING|RUNNING|DONE|FAILED|SKIPPED
+├── status: StepStatus          ← PENDING|RUNNING|DONE|FAILED|SKIPPED
+└── requires_realtime_data: bool ← Planner 标注：本步骤是否需要联网获取实时数据；
+                                   Executor 据此决定是否强制联网/打"⚠ 未联网"标签；
+                                   Verifier 据此审计
 
 StepResult                      ← Executor 对单个子步骤的输出
 ├── step_id: str
@@ -366,14 +401,21 @@ ReactIteration                  ← ReAct 单次循环记录
 系统采用两层 Team 架构：**外层 AgentLoop 负责编排**，**内层 Team 负责执行**。
 
 ```
-外层（AgentLoop）                    内层（Team，每个顶层 Step 独立一个）
-─────────────────────────────────   ────────────────────────────────────────
-THINK → PLAN（顶层步骤分解）         SUB-PLAN（1~3 个子步骤）
-→ 按顺序驱动各 Team                 → EXECUTE（ReAct 工具调用）
-→ EVALUATE（汇总评估）              → VERIFY（逐子步验证）
-→ 记忆更新                         → 内层重规划（sub_replan，子步骤级别）
+外层（AgentLoop）                                内层（Team，每个顶层 Step 独立一个）
+─────────────────────────────────────────────  ────────────────────────────────────────
+THINK（LLM-only，识别不确定断言）                SUB-PLAN（1~3 个子步骤，继承父 step 的
+→ REALTIME_HINTS（纯函数信号聚合）                                  requires_realtime_data）
+→ (opt-in) FACT_CHECK（默认关）                  → EXECUTE（ReAct 工具调用，realtime
+→ PLAN（每步带 requires_realtime_data）                  步骤强制联网或代码兜底打标）
+→ 按依赖顺序驱动各 Team                          → VERIFY（基础 verify + 主题一致性
+→ EVALUATE（汇总评估）                                   + 工具使用审计三层闸门）
+→ 记忆更新                                       → 内层重规划（sub_replan）
 外层重规划（replan，顶层步骤级别）
 ```
+
+**Plan 阶段保持纯粹**：默认配置 `quality.fact_check.enabled=false`，Plan 阶段
+只做 LLM 推理，不调外部工具。THINK 阶段（claim 识别）解耦为独立 LLM 调用，
+被 REALTIME_HINTS 与 opt-in FACT_CHECK 共同消费。
 
 ### 4.3 AgentLoop 主控制流
 

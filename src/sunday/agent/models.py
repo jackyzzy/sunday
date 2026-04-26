@@ -43,6 +43,13 @@ class Step(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     status: StepStatus = StepStatus.PENDING
     is_simple: bool = False  # 规划器标注：True=意图单一可直接执行，False=需子规划
+    requires_realtime_data: bool = False
+    """规划器标注：本步骤是否需要实时数据（联网查询）。
+
+    True 时：Executor 必须调用 web_search/fetch_url；若失败由代码兜底打"未联网"标签；
+    Verifier 据此审计是否真有联网调用。False 时：纯写作/合成步骤，无需联网。
+    默认 False 兼容老 plan JSON。
+    """
 
 
 class Plan(BaseModel):

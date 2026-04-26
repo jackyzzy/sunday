@@ -89,6 +89,14 @@ class Executor:
             expected_output=step.expected_output,
             success_criteria=step.success_criteria,
         )
+        # 最终步骤主题锚定：若 step 命中关键词，在 system prompt 末尾追加锚定段
+        anchor = self._build_anchor(step, state)
+        if anchor:
+            system = f"{system}\n\n{anchor}"
+        # 时效性约束：requires_realtime_data=true 的步骤必须联网
+        realtime_notice = self._build_realtime_notice(step)
+        if realtime_notice:
+            system = f"{system}\n\n{realtime_notice}"
         messages = [{"role": "user", "content": step.intent}]
         tools = self.tool_registry.get_schemas() if self.tool_registry else []
         iterations: list[ReactIteration] = []
@@ -106,7 +114,7 @@ class Executor:
                 return StepResult(
                     step_id=step.id,
                     status=StepStatus.DONE,
-                    output=response.text,
+                    output=self._apply_offline_label(response.text, iterations, step),
                     react_iterations=iterations,
                 )
 
@@ -117,7 +125,7 @@ class Executor:
                 return StepResult(
                     step_id=step.id,
                     status=StepStatus.DONE,
-                    output=response.text,
+                    output=self._apply_offline_label(response.text, iterations, step),
                     react_iterations=iterations,
                 )
 
@@ -151,6 +159,86 @@ class Executor:
 
             # 委托 provider 构造正确的 tool result 消息格式
             messages.extend(provider.build_tool_result_messages(response, observation))
+
+    # ── 时效性约束（Change 5：Executor 防御层）─────────────────────────────
+
+    OFFLINE_LABEL = "> ⚠ 本节未联网验证，基于训练数据整理，时效性未确认。\n\n"
+    """未联网兜底标签；幂等：已含此前缀的输出不重复打。"""
+
+    _SEARCH_TOOLS = ("web_search", "fetch_url")
+
+    def _build_realtime_notice(self, step: Step) -> str:
+        """为 requires_realtime_data=True 的 step 生成 system prompt 注入文本。"""
+        if not step.requires_realtime_data:
+            return ""
+        return (
+            "## 时效性约束（本步骤已被规划标记为 requires_realtime_data）\n"
+            "- 必须至少调用一次 web_search 或 fetch_url 获取最新信息\n"
+            "- 如工具持续失败（返回以 `[错误]` 开头的字符串），仍须完成输出，"
+            "但输出**首行**必须为：\n"
+            f"  `{self.OFFLINE_LABEL.rstrip()}`\n"
+            "- 禁止使用'据公开报道'、'综合公开信息'、'行业媒体综合整理'等暗示"
+            "实际检索的措辞，除非本 step 真的成功调用过联网工具"
+        )
+
+    def _apply_offline_label(
+        self, output: str, iterations: list[ReactIteration], step: Step,
+    ) -> str:
+        """代码兜底：未联网且无标签的 realtime 步骤强制 prepend 标签。
+
+        触发条件（同时满足）：
+        - config.quality.offline_output_label.enabled
+        - step.requires_realtime_data
+        - 本 step 没有任何成功的联网工具调用（observation 不以 `[错误]` 开头）
+        - 输出首行尚未含此标签（幂等保证）
+        """
+        cfg = self.config.quality.offline_output_label
+        if not cfg.enabled or not step.requires_realtime_data:
+            return output
+        if any(self._is_search_success(it) for it in iterations):
+            return output
+        if output.lstrip().startswith("> ⚠ 本节未联网验证"):
+            return output
+        return self.OFFLINE_LABEL + output
+
+    @classmethod
+    def _is_search_success(cls, it: ReactIteration) -> bool:
+        if it.tool_name not in cls._SEARCH_TOOLS:
+            return False
+        obs = it.observation or ""
+        return not obs.lstrip().startswith("[错误]")
+
+    def _build_anchor(self, step: Step, state: AgentState) -> str:
+        """为"最终汇总/整合"类步骤生成主题锚定段，防止输出被跨会话旧话题带偏。
+
+        仅当 step.intent 命中 config.quality.final_step_anchor.intent_keywords 时生效。
+        """
+        cfg = self.config.quality.final_step_anchor
+        if not cfg.enabled:
+            return ""
+        intent = step.intent or ""
+        if not any(kw in intent for kw in cfg.intent_keywords):
+            return ""
+
+        parts: list[str] = []
+        if state.task and state.task.strip():
+            parts.append(f"任务主题：{state.task.strip()}")
+        if state.plan and state.plan.goal and state.plan.goal.strip():
+            parts.append(f"规划目标：{state.plan.goal.strip()}")
+        if state.session_thread and state.session_thread.key_entities:
+            parts.append(
+                f"关键实体：{'、'.join(state.session_thread.key_entities)}"
+            )
+        if not parts:
+            return ""
+
+        anchor_lines = "\n".join(f"- {p}" for p in parts)
+        return (
+            "【主题锚定】当前步骤涉及整合/汇总/最终输出，请严格围绕以下主题展开，"
+            "不得偏离转向其他无关话题：\n"
+            f"{anchor_lines}\n"
+            "若系统提示中的跨会话记忆出现其他话题，不得将其作为本次输出的主干内容。"
+        )
 
     # ── 内部 LLM 调用（执行阶段 temperature=0） ────────────────────────────
 

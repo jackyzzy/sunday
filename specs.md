@@ -109,9 +109,16 @@ Gateway（本地守护进程）
 
 #### F-05：结构化规划（PLAN）
 - 基于思考结果生成结构化任务计划
-- 计划格式：步骤列表，每步包含：意图描述、预期输入/输出、成功标准
-- 规划阶段不调用任何外部工具
+- 计划格式：步骤列表，每步包含：意图描述、预期输入/输出、成功标准、`requires_realtime_data`
+- **规划阶段默认不调用任何外部工具**（保持 plan 纯粹）；可选 `quality.fact_check.enabled=true` 开启 plan 时联网核实
+- 规划前先做 REALTIME_HINTS 信号聚合：基于任务关键词（来自 [workspace/RUNTIME_RULES.md](workspace/RUNTIME_RULES.md)）+ THINK 阶段识别的不确定实体，提示 LLM 为每个 step 标注 `requires_realtime_data: bool`
 - 规划结果记录到会话日志
+
+#### F-05b：实时数据需求识别
+- Planner 为每个 step 输出 `requires_realtime_data: bool`，固化到 plan
+- 三信号决策：Signal A 任务/intent 关键词匹配（纯规则）+ Signal B think 阶段不确定实体（LLM-only 调用）+ Signal C plan LLM 自判
+- 信号传递到 Executor（强制要求联网或打"⚠ 未联网"标签）和 Verifier（工具使用审计）
+- 内层 Team 的 sub_step 默认继承父 step 的实时性标记
 
 #### F-06：步骤拆分（DECOMPOSE）
 - 将每个计划步骤拆分为可原子执行的工具调用单元
@@ -124,7 +131,10 @@ Gateway（本地守护进程）
 - 上下文溢出保护：接近 token 限制时自动摘要早期步骤
 
 #### F-08：结果验证（VERIFY）
-- 每步执行完成后，根据计划中的成功标准验证结果
+- 每步执行完成后，三层闸门顺序检查：
+  1. 基础 verify（按 success_criteria 判定）
+  2. 主题一致性（`subject_consistency`，可关）：兜底跨会话上下文串话
+  3. 工具使用审计（`tool_usage_audit`，可关）：`requires_realtime_data=true` 的步骤若既未成功联网也无未联网标签 → failed + replan
 - 验证失败时触发：重试当前步骤 / 局部重规划 / 向用户报告
 - 所有步骤完成后生成最终结果摘要
 
@@ -142,7 +152,7 @@ Gateway（本地守护进程）
 
 | 层级 | 路径 | 内容 | 维护者 |
 |------|------|------|--------|
-| **L0 永久层** | `~/.sunday/workspace/SOUL.md`、`AGENTS.md`、`TOOLS.md` | Agent 身份、操作规则、工具约定 | 用户手动编辑，不被 AI 覆写 |
+| **L0 永久层** | `~/.sunday/workspace/SOUL.md`、`AGENTS.md`、`TOOLS.md`、`RUNTIME_RULES.md` | Agent 身份、操作规则、工具约定、运行规则（关键词/阈值）| 用户手动编辑 + AI 在"AI 学习"节追加 |
 | **L1 长期层** | `~/.sunday/memory/MEMORY.md`、`USER.md` | 跨会话事实摘要、用户画像 | AI 自动写入（consolidation） |
 | **L2 每日层** | `~/.sunday/memory/daily/YYYY-MM-DD.md` | 每日会话摘要（30 天 TTL）| AI 自动写入（从 L3 提炼） |
 | **L3 会话层** | `~/.sunday/sessions/{id}/` | 完整对话详情（按轮次组织）| 自动记录 |
@@ -157,6 +167,7 @@ Gateway（本地守护进程）
 | `SOUL.md` | 智能体身份、人格、价值观、行为边界 | 永久，用户手动编辑 |
 | `AGENTS.md` | 操作规则、记忆使用方式 | 永久，用户手动编辑 |
 | `TOOLS.md` | 工具使用约定和注意事项 | 长期，用户/智能体写入 |
+| `RUNTIME_RULES.md` | 运行规则：实时性关键词、主题一致性阈值 | 用户手编 + AI 在"AI 学习"节追加 |
 
 #### F-10b：动态记忆（L1+L2）
 路径：`~/.sunday/memory/`（AI 运行时产物，不建议 git 管理）

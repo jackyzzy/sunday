@@ -20,6 +20,8 @@ class EventType(str, Enum):
     STATUS = "status"
     STREAM = "stream"
     PLAN = "plan"
+    PLAN_FACT_CHECK = "plan_fact_check"
+    PLAN_REALTIME_HINTS = "plan_realtime_hints"
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     CONFIRM_REQUEST = "confirm_request"

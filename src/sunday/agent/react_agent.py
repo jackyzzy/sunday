@@ -182,8 +182,8 @@ class ReactAgent:
 
             await logged_emit(state.session_id, "status", {"status": "thinking"})
 
-            # THINK + PLAN
-            plan = await self.plan(state)
+            # THINK + (可选 FACT_CHECK) + PLAN
+            plan = await self.plan(state, emit=logged_emit)
             state.plan = plan
             if not plan.steps:
                 msg = "规划失败：LLM 未能生成有效的执行步骤，请重试或简化任务描述。"
@@ -235,9 +235,17 @@ class ReactAgent:
 
     # ── 各阶段独立方法 ───────────────────────────────────────────────────────
 
-    async def plan(self, state: AgentState) -> Plan:
-        """THINK + PLAN 阶段：调用顶层 Planner 生成 Plan。"""
-        return await self.planner.think_and_plan(state)
+    async def plan(self, state: AgentState, emit: EmitCallable | None = None) -> Plan:
+        """THINK + (可选 FACT_CHECK) + PLAN 阶段：调用顶层 Planner 生成 Plan。
+
+        把 tool_registry 与 emit 传入 Planner，以便 FACT_CHECK 子阶段可以调用白名单工具
+        并向客户端推送 plan_fact_check 事件。
+        """
+        return await self.planner.think_and_plan(
+            state,
+            tool_registry=self.tool_registry,
+            emit=emit or self.emit,
+        )
 
     async def execute(self, state: AgentState, emit: EmitCallable) -> str:
         """EXECUTE + VERIFY 阶段：串行执行所有步骤，含重规划，返回最终评估摘要。"""

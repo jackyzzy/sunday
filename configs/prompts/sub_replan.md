@@ -13,6 +13,7 @@ Team 内的一个子步骤执行失败，需要对该子步骤及其后续子步
 - 每步必须是可直接执行的工具调用或直接输出，不能是人机交互操作
 - success_criteria 基于输出内容自动验证，不应要求交互
 - 步骤 id 格式为 "{parent_step_id}.R1"、"{parent_step_id}.R2" 等（R 代表重规划）
+- requires_realtime_data：与原失败步骤保持一致（涉及实时事实陈述的设 true，纯整合写作设 false）
 
 以 JSON 格式输出，不要任何额外说明：
 {{
@@ -23,7 +24,8 @@ Team 内的一个子步骤执行失败，需要对该子步骤及其后续子步
       "expected_input": "需要什么输入",
       "expected_output": "输出是什么",
       "success_criteria": "输出满足什么条件算成功",
-      "depends_on": []
+      "depends_on": [],
+      "requires_realtime_data": false
     }}
   ]
 }}
