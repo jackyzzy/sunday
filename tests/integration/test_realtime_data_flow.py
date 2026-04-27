@@ -26,7 +26,6 @@ from sunday.agent.models import (
     Step,
     StepResult,
 )
-from sunday.agent.planner import Planner
 from sunday.agent.verifier import Verifier
 
 

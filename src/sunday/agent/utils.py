@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable
 
-
 # emit 回调类型
 EmitCallable = Callable[[str, str, dict], Awaitable[None]]
 

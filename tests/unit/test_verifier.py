@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
 
-from sunday.agent.models import AgentState, Step, StepResult, StepStatus
+from sunday.agent.models import AgentState, Step, StepResult
 from sunday.agent.verifier import Verifier, VerifyResult
 
 

@@ -11,8 +11,8 @@ from sunday.agent.utils import EmitCallable, noop_emit
 from sunday.agent.verifier import Verifier
 
 if TYPE_CHECKING:
-    from sunday.config import SundayConfig
     from sunday.agent.executor import ToolRegistryProtocol
+    from sunday.config import SundayConfig
 
 logger = logging.getLogger(__name__)
 

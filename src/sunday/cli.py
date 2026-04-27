@@ -127,108 +127,110 @@ async def _run_task(task: str, thinking: str, model_override: str | None,
                 click.echo(f"  {icon} {step_id}{suffix}")
 
     try:
+        from sunday.bootstrap import build_memory_client
         from sunday.gateway.history import extract_conversation
-        from sunday.gateway.session import SessionManager
-        from sunday.agent.models import SessionThread
-
-        cfg = cfg_settings.sunday  # SundayConfig
-        level = ThinkingLevel(thinking)
-
-        # 通过 SessionManager 创建或复用 session 目录（L3），保持 CLI/TUI 一致性
-        session_mgr = SessionManager(cfg.agent.sessions_dir)
-        if session_id:
-            session_mgr.ensure_session(session_id)
-        else:
-            session_id = session_mgr.new_session()
-        turn_id = uuid.uuid4().hex[:8]
-        turn_start_ts = datetime.now(timezone.utc).isoformat()
-
-        # 读取历史与主线（与 Gateway 一致）
-        recent_events = session_mgr.load_history(session_id, max_events=50)
-        history = extract_conversation(recent_events, max_turns=5)
-        thread_raw = session_mgr.get_session_thread(session_id)
-        session_thread = SessionThread(**thread_raw) if thread_raw else None
-
-        turn_buffer.update({
-            "turn_id": turn_id,
-            "turn_index": None,
-            "ts_start": turn_start_ts,
-            "ts_end": None,
-            "outcome": None,
-            "user_input": task,
-            "plan": None,
-            "execution": [],
-            "output": None,
-        })
-
-        state = AgentState(
-            session_id=session_id,
-            task=task,
-            history=history,
-            session_thread=session_thread,
-            thinking_level=level,
-            turn_id=turn_id,
-        )
-
-        # CLI 确认处理器：stdin 读取 y/n；非交互模式自动拒绝
-        async def cli_confirm(tool_name: str, arguments: dict, session_id: str) -> bool:
-            if yes:
-                click.echo(f"[--yes] 自动确认工具 '{tool_name}'")
-                return True
-            click.echo(f"\n⚠️  工具 '{tool_name}' 是不可逆操作，参数：{arguments}")
-            import sys
-            if not sys.stdin.isatty():
-                click.echo("非交互模式，自动拒绝不可逆操作。", err=True)
-                return False
-            try:
-                answer = click.prompt("是否继续执行？[y/N]", default="N")
-                return answer.strip().lower() in ("y", "yes")
-            except click.exceptions.Abort:
-                return False
-
         from sunday.gateway.protocol import EventType
+        from sunday.memory.models import SessionEvent, TurnRecord
         from sunday.tools.cli_tool import format_report_footer
 
-        # 写 TURN_START + SEND 到 stream（任务执行前）
-        await session_mgr.append_stream(
-            session_id, EventType.TURN_START, {"content": task}, turn_id=turn_id
-        )
-        await session_mgr.append_stream(
-            session_id, EventType.SEND, {"content": task}, turn_id=turn_id
-        )
+        cfg = cfg_settings.sunday
+        level = ThinkingLevel(thinking)
 
-        loop = build_agent_loop(cfg, cli_emit, mode="cli", confirmation_handler=cli_confirm)
-        result = ""
-        outcome = "error"
+        client = build_memory_client(cfg)
         try:
-            result = await loop.run(state) or ""
-            outcome = "success"
-        finally:
-            # 无论成功还是异常，都写 DONE + TURN_END + turn 文件，保持 L3 完整性
-            turn_buffer["output"] = result
-            turn_buffer["outcome"] = outcome
-            turn_buffer["ts_end"] = datetime.now(timezone.utc).isoformat()
-            await session_mgr.append_stream(
-                session_id, EventType.DONE, {"content": result}, turn_id=turn_id
-            )
-            await session_mgr.append_stream(
-                session_id, EventType.TURN_END, {"outcome": outcome}, turn_id=turn_id
-            )
-            await session_mgr.write_turn(session_id, turn_buffer)
-            # 增量更新会话主线（失败静默）
-            try:
-                from sunday.memory.session_thread import update_session_thread
-                await update_session_thread(session_id, turn_buffer, session_mgr, cfg)
-            except Exception as thread_err:
-                click.echo(f"[警告] 会话主线更新失败：{thread_err}", err=True)
+            if session_id:
+                await client.sessions.ensure(session_id)
+            else:
+                session_meta = await client.sessions.create()
+                session_id = session_meta.session_id
+            turn_id = uuid.uuid4().hex[:8]
+            turn_start_ts = datetime.now(timezone.utc).isoformat()
 
-        click.echo("\n" + "─" * 50)
-        click.echo(result)
-        report_path = cfg.agent.sessions_dir / session_id / "reports" / turn_id
-        footer = format_report_footer(result, report_path)
-        if footer:
-            click.echo(footer)
-        click.echo(f"\n会话 ID：{session_id}（复用：sunday run --session {session_id} ...）")
+            recent_events = await client.sessions.load_events(session_id, max_events=50)
+            history = extract_conversation(
+                [_event_to_dict(e) for e in recent_events], max_turns=5,
+            )
+            session_thread = await client.sessions.get_thread(session_id)
+
+            turn_buffer.update({
+                "turn_id": turn_id,
+                "turn_index": 0,
+                "ts_start": turn_start_ts,
+                "ts_end": "",
+                "outcome": "",
+                "user_input": task,
+                "plan": None,
+                "execution": [],
+                "output": "",
+            })
+
+            state = AgentState(
+                session_id=session_id,
+                task=task,
+                history=history,
+                session_thread=session_thread,
+                thinking_level=level,
+                turn_id=turn_id,
+            )
+
+            async def cli_confirm(tool_name: str, arguments: dict, session_id: str) -> bool:
+                if yes:
+                    click.echo(f"[--yes] 自动确认工具 '{tool_name}'")
+                    return True
+                click.echo(f"\n⚠️  工具 '{tool_name}' 是不可逆操作，参数：{arguments}")
+                import sys
+                if not sys.stdin.isatty():
+                    click.echo("非交互模式，自动拒绝不可逆操作。", err=True)
+                    return False
+                try:
+                    answer = click.prompt("是否继续执行？[y/N]", default="N")
+                    return answer.strip().lower() in ("y", "yes")
+                except click.exceptions.Abort:
+                    return False
+
+            async def _append(et: EventType, data: dict) -> None:
+                await client.sessions.append_event(
+                    session_id, SessionEvent(
+                        type=et.value, session_id=session_id,
+                        turn_id=turn_id, data=data,
+                    ),
+                )
+
+            await _append(EventType.TURN_START, {"content": task})
+            await _append(EventType.SEND, {"content": task})
+
+            loop = build_agent_loop(
+                cfg, cli_emit, mode="cli",
+                confirmation_handler=cli_confirm,
+                memory_client=client,
+            )
+            result = ""
+            outcome = "error"
+            try:
+                result = await loop.run(state) or ""
+                outcome = "success"
+            finally:
+                turn_buffer["output"] = result
+                turn_buffer["outcome"] = outcome
+                turn_buffer["ts_end"] = datetime.now(timezone.utc).isoformat()
+                await _append(EventType.DONE, {"content": result})
+                await _append(EventType.TURN_END, {"outcome": outcome})
+                await client.sessions.write_turn(session_id, TurnRecord(**turn_buffer))
+                try:
+                    from sunday.memory.session_thread import update_session_thread
+                    await update_session_thread(session_id, turn_buffer, client, cfg)
+                except Exception as thread_err:
+                    click.echo(f"[警告] 会话主线更新失败：{thread_err}", err=True)
+
+            click.echo("\n" + "─" * 50)
+            click.echo(result)
+            report_path = client.sessions.report_dir(session_id, turn_id)
+            footer = format_report_footer(result, report_path)
+            if footer:
+                click.echo(footer)
+            click.echo(f"\n会话 ID：{session_id}（复用：sunday run --session {session_id} ...）")
+        finally:
+            await client.aclose()
     except Exception as e:
         import httpx
         if isinstance(e, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
@@ -352,23 +354,37 @@ def memory():
                 type=click.Choice(["SOUL", "MEMORY", "USER", "TOOLS", "AGENTS"]))
 def memory_show(file):
     """查看记忆文件"""
+    from sunday.bootstrap import build_memory_client
     from sunday.config import settings
-    path = settings.sunday.agent.workspace_dir / f"{file}.md"
-    if path.exists():
-        click.echo(path.read_text(encoding="utf-8"))
-    else:
-        click.echo(f"文件不存在：{path}", err=True)
+
+    async def _show() -> None:
+        client = build_memory_client(settings.sunday, run_janitor=False)
+        try:
+            if file in {"SOUL", "AGENTS", "TOOLS"}:
+                content = await client.workspace.read(file)
+            else:
+                content = await client.knowledge.read_layer(file)
+            click.echo(content if content else f"（{file} 内容为空或文件不存在）")
+        finally:
+            await client.aclose()
+
+    asyncio.run(_show())
 
 
 @memory.command("search")
 @click.argument("keyword")
 def memory_search(keyword):
-    """搜索记忆内容"""
+    """搜索记忆内容（扫描 workspace + memory 下的 .md 文件）"""
     from sunday.config import settings
+
     workspace = settings.sunday.agent.workspace_dir
+    memory_dir = settings.sunday.agent.memory_dir
     found = False
-    for md_file in workspace.glob("*.md"):
-        content = md_file.read_text(encoding="utf-8")
+    for md_file in list(workspace.glob("*.md")) + list(memory_dir.glob("*.md")):
+        try:
+            content = md_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
         lines = [line for line in content.splitlines() if keyword.lower() in line.lower()]
         if lines:
             click.echo(f"\n📄 {md_file.name}:")
@@ -377,6 +393,17 @@ def memory_search(keyword):
             found = True
     if not found:
         click.echo(f"未找到包含 '{keyword}' 的记忆")
+
+
+def _event_to_dict(event):
+    """SessionEvent → 兼容 extract_conversation 的字典。"""
+    return {
+        "type": event.type,
+        "session_id": event.session_id,
+        "turn_id": event.turn_id,
+        "data": event.data,
+        "ts": event.ts,
+    }
 
 
 @main.group()

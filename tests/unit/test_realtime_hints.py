@@ -1,14 +1,12 @@
 """realtime_hints 信号聚合器单元测试 — 关键词匹配、实体抽取、prompt 格式化。"""
 from __future__ import annotations
 
-from pathlib import Path
-
 from sunday.agent.realtime_hints import (
     RealtimeHints,
     classify,
     format_for_plan_prompt,
 )
-from sunday.memory.runtime_rules import RuntimeRules
+from sunday.memory.models import RuntimeRules
 
 
 def _rules(*kw: str) -> RuntimeRules:
@@ -117,11 +115,9 @@ def test_format_combines_keywords_and_entities():
     assert "摩尔线程" in out
 
 
-# ── workspace 集成 ─────────────────────────────────────────────────────────
+# ── 内置规则回退 ───────────────────────────────────────────────────────────
 
-def test_classify_loads_rules_from_workspace(tmp_path: Path):
-    (tmp_path / "RUNTIME_RULES.md").write_text(
-        "## 时间敏感关键词\n调研, 上市\n", encoding="utf-8"
-    )
-    hints = classify("调研一下", workspace_dir=tmp_path)
+def test_classify_falls_back_to_builtin_keywords_when_no_rules():
+    """rules=None 时使用内置默认关键词，"调研" 在默认集中。"""
+    hints = classify("调研一下")
     assert "调研" in hints.task_keywords

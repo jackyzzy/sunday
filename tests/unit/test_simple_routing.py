@@ -10,7 +10,6 @@ import yaml
 from sunday.agent.models import AgentState, Plan, Step, StepResult, StepStatus, TeamResult
 from sunday.agent.verifier import VerifyResult
 
-
 # ─── 通用工厂 ────────────────────────────────────────────────────────────────
 
 def _make_config(tmp_path):

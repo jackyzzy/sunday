@@ -1,7 +1,7 @@
 """工具健康状态存储 — 会话级，无持久化。"""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Optional

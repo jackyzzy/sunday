@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import yaml
 
-from sunday.tools.health_store import ErrorType, ToolStatus
+from sunday.tools.health_store import ToolStatus
 
 
 def _make_registry(tmp_path):

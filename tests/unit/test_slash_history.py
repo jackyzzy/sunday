@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from sunday.gateway.server import _compact_turn_for_display, _ellipsize
+from sunday.memory.models import TurnRecord
 from sunday.tui.app import _format_history_payload
 
 
@@ -17,16 +18,14 @@ def test_ellipsize_long_truncated_with_marker():
 
 
 def test_compact_turn_preserves_core_fields():
-    turn = {
-        "turn_id": "t-abc",
-        "turn_index": 2,
-        "ts_start": "2026-04-20T10:00:00Z",
-        "outcome": "success",
-        "user_input": "介绍 DeepSeek V4 发布",
-        "plan": {"goal": "梳理 DeepSeek V4 核心能力"},
-        "output": "DeepSeek V4 是 ...",
-        "execution": [{"step": "1"}],  # 应被丢弃
-    }
+    turn = TurnRecord(
+        turn_id="t-abc", turn_index=2,
+        ts_start="2026-04-20T10:00:00Z", outcome="success",
+        user_input="介绍 DeepSeek V4 发布",
+        plan={"goal": "梳理 DeepSeek V4 核心能力"},
+        output="DeepSeek V4 是 ...",
+        execution=[{"step": "1"}],  # 不在 compact 输出中
+    )
     out = _compact_turn_for_display(turn)
     assert out["turn_id"] == "t-abc"
     assert out["turn_index"] == 2
@@ -37,18 +36,18 @@ def test_compact_turn_preserves_core_fields():
 
 
 def test_compact_turn_ellipsizes_long_output():
-    turn = {
-        "turn_id": "t1", "turn_index": 1, "ts_start": "", "outcome": "success",
-        "user_input": "q", "plan": {"goal": "g"}, "output": "x" * 1000,
-    }
+    turn = TurnRecord(
+        turn_id="t1", turn_index=1, outcome="success",
+        user_input="q", plan={"goal": "g"}, output="x" * 1000,
+    )
     out = _compact_turn_for_display(turn)
     assert out["output"].endswith("……")
     assert len(out["output"]) <= 400 + len("……")
 
 
 def test_compact_turn_handles_missing_plan():
-    """plan 字段为 None 或非 dict 时不应崩溃。"""
-    turn = {"turn_id": "t1", "turn_index": 1, "user_input": "q", "output": "a"}
+    """plan 字段为 None 时不应崩溃。"""
+    turn = TurnRecord(turn_id="t1", turn_index=1, user_input="q", output="a")
     out = _compact_turn_for_display(turn)
     assert out["plan_goal"] == ""
 

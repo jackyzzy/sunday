@@ -1,19 +1,15 @@
-"""ReactAgent — 顶层 ReAct Agent（面向对象重构）。
+"""ReactAgent — 顶层 ReAct Agent。
 
 执行流程：
-    Gateway/CLI 创建 ReactAgent(config, emit, mode)
+    Gateway/CLI 通过 build_agent_loop() 构造 ReactAgent
         → run(state)
-            → inject_memory_context()   # L0 上下文注入
+            → inject_memory_context()   # L0/L1/L2 上下文注入（走 MemoryClient）
             → plan(state)               # THINK + PLAN
             → execute(state, ...)       # 遍历步骤，每步创建 Team/SimpleNode
             → evaluate(state)           # 顶层评估汇总
-            → consolidate_memory(state) # 记忆整合
+            → consolidate_memory(state) # 记忆整合（走 Consolidator → MemoryClient）
 
-与旧 AgentLoop 的区别：
-- __init__ 只需传 config，所有子组件在构造时自动初始化（无需外部注入）
-- _create_node() 实现配置驱动的节点工厂，支持 clone ToolRegistry 后叠加专属技能
-- 各阶段提取为独立方法（plan/execute/evaluate/replan），职责清晰
-- memory 相关操作封装为 inject_memory_context / consolidate_memory
+所有持久化都通过外部注入的 MemoryClient 走，不持有任何文件 IO。
 """
 from __future__ import annotations
 
@@ -29,11 +25,13 @@ from sunday.agent.simple import SimpleNode
 from sunday.agent.team import Team
 from sunday.agent.utils import EmitCallable, noop_emit
 from sunday.agent.verifier import Verifier
+from sunday.memory.consolidator import Consolidator
+from sunday.memory.context import ContextBuilder
+from sunday.memory.models import LogEvent
 
 if TYPE_CHECKING:
     from sunday.config import SundayConfig
-    from sunday.memory.context import ContextBuilder
-    from sunday.memory.manager import MemoryManager
+    from sunday.memory.client import MemoryClient
     from sunday.tools.registry import ConfirmationHandler, ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -42,12 +40,8 @@ logger = logging.getLogger(__name__)
 class ReactAgent:
     """顶层 ReAct Agent。
 
-    网关/CLI 通过 ReactAgent(config, emit, mode) 创建，__init__ 自动初始化
-    所有子组件（Planner、Verifier、ToolRegistry、ContextBuilder、MemoryManager），
-    无需外部手动注入依赖。
-
-    子节点（Team / SimpleNode）在 _create_node() 中按步骤按需创建，
-    各自接收 clone 后的 ToolRegistry 副本，可独立叠加专属技能工具。
+    所有子组件（Planner、Verifier、ToolRegistry、ContextBuilder、Consolidator）
+    在 __init__ 中根据传入的 config + memory_client 自动初始化。
     """
 
     _probed: bool = False  # 类变量默认值，测试通过 __new__ 绕过 __init__ 时也生效
@@ -55,16 +49,16 @@ class ReactAgent:
     def __init__(
         self,
         config: "SundayConfig",
+        memory_client: "MemoryClient",
         emit: EmitCallable | None = None,
         mode: str = "gateway",
         confirmation_handler: "ConfirmationHandler | None" = None,
     ) -> None:
         from sunday.bootstrap import build_tool_registry
-        from sunday.memory.context import ContextBuilder
-        from sunday.memory.manager import MemoryManager
         from sunday.skills.loader import SkillLoader
 
         self.config = config
+        self.memory = memory_client
         self.emit = emit or noop_emit
         self.mode = mode
         self.session_report_dir: Path | None = None
@@ -77,37 +71,28 @@ class ReactAgent:
         self.planner = Planner(config)
         self.verifier = Verifier(config)
 
-        # Memory 接口（L0 workspace_dir，L1+L2 memory_dir）
+        # 上下文与记忆整合（全部走 MemoryClient）
         workspace_dir = config.agent.workspace_dir
-        memory_dir = config.agent.memory_dir
-        skills_dir = workspace_dir.parent.parent / "skills"
         skill_loader = SkillLoader(
-            project_skills_dir=skills_dir,
+            project_skills_dir=workspace_dir.parent.parent / "skills",
             user_skills_dir=workspace_dir / "skills",
         )
         skill_loader.discover()
-        self.context_builder: ContextBuilder = ContextBuilder(
-            workspace_dir, skill_loader=skill_loader, config=config,
-            memory_dir=memory_dir,
+        self.context_builder = ContextBuilder(
+            client=memory_client, skill_loader=skill_loader, config=config,
         )
-        self.memory_manager: MemoryManager = MemoryManager(memory_dir, config=config,
-                                                            workspace_dir=workspace_dir)
+        self.consolidator = Consolidator(memory_client, config)
 
-        # 首次运行时确保 .sunday/ 目录结构和初始文件存在
-        self._ensure_user_dirs(workspace_dir, memory_dir, config)
+        # 首次运行时确保用户目录结构和初始 L0/L1 模板存在
+        self._ensure_user_dirs(workspace_dir, config)
 
     @staticmethod
-    def _ensure_user_dirs(workspace_dir: Path, memory_dir: Path, config: "SundayConfig") -> None:
-        """确保运行时目录结构完整，首次运行时从项目模板复制 L0/L1 初始文件。
-
-        这解决了 .sunday 目录为空或首次执行时 L0/L1 文件缺失、sessions 目录不存在的问题。
-        """
+    def _ensure_user_dirs(workspace_dir: Path, config: "SundayConfig") -> None:
+        """确保运行时目录结构完整，首次运行时从项目模板复制 L0/L1 初始文件。"""
         import shutil
 
-        # 项目模板目录：workspace_dir（.sunday/workspace）上溯两级到项目根，再进 workspace/
         template_dir = workspace_dir.parent.parent / "workspace"
 
-        # L0：workspace 目录 + 初始配置文件（不覆盖用户已有内容）
         workspace_dir.mkdir(parents=True, exist_ok=True)
         if template_dir.is_dir():
             for fname in ("SOUL.md", "AGENTS.md", "TOOLS.md"):
@@ -117,7 +102,7 @@ class ReactAgent:
                     shutil.copy2(src, dest)
                     logger.info("初始化 L0 文件：%s", dest)
 
-        # L1：memory 目录 + 空白 MEMORY.md / USER.md（不覆盖）
+        memory_dir = config.agent.memory_dir
         memory_dir.mkdir(parents=True, exist_ok=True)
         (memory_dir / "daily").mkdir(parents=True, exist_ok=True)
         if template_dir.is_dir():
@@ -128,68 +113,61 @@ class ReactAgent:
                     shutil.copy2(src, dest)
                     logger.info("初始化 L1 文件：%s", dest)
 
-        # L3：sessions 目录
-        sessions_dir = config.agent.sessions_dir
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-
-        # 其他运行时目录
+        config.agent.sessions_dir.mkdir(parents=True, exist_ok=True)
         config.agent.log_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 主入口 ───────────────────────────────────────────────────────────────
 
     async def run(self, state: AgentState) -> str:
         """执行完整的 think→plan→execute→verify 循环，返回最终摘要。"""
-        from sunday.agent.session_log import SessionLog
 
         # 每次任务开始时重置文件写入记录，避免跨会话污染
         self.tool_registry._agent_written_files = []
 
-        # 首次运行时对所有有 probe 的工具执行端到端探测（B 场景）
+        # 首次运行时对所有有 probe 的工具执行端到端探测
         if not self._probed:
             await self.tool_registry.probe_all()
             self._probed = True
 
-        # 日志目录：优先从 config 读取，不存在时回退默认路径（兼容测试中 mock config）
-        log_dir = (self.config.agent.log_dir
-                   if getattr(self.config, "agent", None) and self.config.agent.log_dir
-                   else Path.home() / ".sunday" / "logs")
-        # gateway 模式下 stream.jsonl 已记录等价内容，跳过 SessionLog 避免双写
-        if self.mode == "gateway":
-            session_log: SessionLog | None = None
-        else:
-            session_log = SessionLog(log_dir, state.session_id)
-            session_log.log_start(state.task, state.thinking_level.value, self.mode)
-
+        start_ts = datetime.now(timezone.utc)
         emit = self.emit
 
         async def logged_emit(sid: str, et: str, d: dict) -> None:
             await emit(sid, et, d)
-            if session_log:
-                session_log.log(et, d)
+            await self._log_event(sid, et, d)
 
         # session report 目录：sessions/{session_id}/reports/{turn_id}/
-        _sessions_dir = getattr(getattr(self.config, "agent", None), "sessions_dir", None)
-        session_report_dir: Path | None = (
-            _sessions_dir / state.session_id / "reports" / state.turn_id
-            if _sessions_dir and state.turn_id else None
-        )
+        if state.turn_id:
+            session_report_dir = self.memory.sessions.report_dir(
+                state.session_id, state.turn_id
+            )
+        else:
+            session_report_dir = None
         self.tool_registry.set_report_dir(session_report_dir)
         self.session_report_dir = session_report_dir
 
-        try:
-            # L0 上下文注入
-            await self.inject_memory_context(state)
+        # 写 session_start 日志
+        if state.session_id:
+            await self.memory.logs.emit(state.session_id, LogEvent(
+                event="session_start",
+                session_id=state.session_id,
+                data={
+                    "task": state.task,
+                    "thinking_level": state.thinking_level.value,
+                    "mode": self.mode,
+                },
+            ))
 
+        try:
+            await self.inject_memory_context(state)
             await logged_emit(state.session_id, "status", {"status": "thinking"})
 
-            # THINK + (可选 FACT_CHECK) + PLAN
             plan = await self.plan(state, emit=logged_emit)
             state.plan = plan
             if not plan.steps:
                 msg = "规划失败：LLM 未能生成有效的执行步骤，请重试或简化任务描述。"
                 logger.warning(msg)
-                if session_log:
-                    session_log.log_end(msg, [])
+                await self._log_session_end(state, start_ts, msg, [])
                 return msg
             max_steps = self.config.reasoning.max_steps
             if len(plan.steps) > max_steps:
@@ -204,30 +182,24 @@ class ReactAgent:
                 ],
             })
 
-            # EXECUTE + VERIFY
             summary = await self.execute(state, logged_emit)
 
             await logged_emit(state.session_id, "status", {"status": "idle"})
             self._write_report(session_report_dir, summary, state)
 
-            # 记忆整合
             await self.consolidate_memory(state)
-
-            if session_log:
-                session_log.log_end(summary, state.team_results)
+            await self._log_session_end(state, start_ts, summary, state.team_results)
             return summary
 
         except asyncio.CancelledError:
             state.aborted = True
             await emit(state.session_id, "status", {"status": "aborted"})
-            if session_log:
-                session_log.log_abort()
+            await self._log_session_abort(state, start_ts)
             raise
         except Exception as e:
             logger.exception("ReactAgent 未捕获异常：%s", e)
             await emit(state.session_id, "status", {"status": "error", "message": str(e)})
-            if session_log:
-                session_log.log_error(e)
+            await self._log_session_error(state, start_ts, e)
             raise
         finally:
             logger.info("ReactAgent 结束，session=%s，Team数=%d",
@@ -236,11 +208,12 @@ class ReactAgent:
     # ── 各阶段独立方法 ───────────────────────────────────────────────────────
 
     async def plan(self, state: AgentState, emit: EmitCallable | None = None) -> Plan:
-        """THINK + (可选 FACT_CHECK) + PLAN 阶段：调用顶层 Planner 生成 Plan。
-
-        把 tool_registry 与 emit 传入 Planner，以便 FACT_CHECK 子阶段可以调用白名单工具
-        并向客户端推送 plan_fact_check 事件。
-        """
+        # 首次 plan 之前预加载 runtime rules（每进程一次缓存）
+        if self.planner._runtime_rules is None:
+            try:
+                self.planner._runtime_rules = await self.memory.workspace.read_runtime_rules()
+            except Exception:
+                logger.exception("读取 runtime rules 失败，使用内置默认")
         return await self.planner.think_and_plan(
             state,
             tool_registry=self.tool_registry,
@@ -248,7 +221,6 @@ class ReactAgent:
         )
 
     async def execute(self, state: AgentState, emit: EmitCallable) -> str:
-        """EXECUTE + VERIFY 阶段：串行执行所有步骤，含重规划，返回最终评估摘要。"""
         reasoning = self.config.reasoning
         max_replans = reasoning.max_replans
 
@@ -316,9 +288,7 @@ class ReactAgent:
                         steps = steps[:idx] + new_steps
                         state.plan.steps = steps
                         replan_took_over = True
-                        logger.debug(
-                            "步骤 %s 失败结果已丢弃，由重规划步骤替代", step.id
-                        )
+                        logger.debug("步骤 %s 失败结果已丢弃，由重规划步骤替代", step.id)
                     break
                 else:
                     logger.warning(
@@ -330,7 +300,6 @@ class ReactAgent:
             if replan_took_over:
                 continue
 
-            # 提取 verify_reason：优先取最后一个失败子步骤的原因
             verify_reason = ""
             if team_result.sub_steps:
                 failing = [s for s in team_result.sub_steps if not s.verified]
@@ -351,18 +320,15 @@ class ReactAgent:
             })
             idx += 1
 
-        # EVALUATE
         await emit(state.session_id, "status", {"status": "summarizing"})
         return await self.evaluate(state)
 
     async def evaluate(self, state: AgentState) -> str:
-        """EVALUATE 阶段：顶层整体评估，生成任务摘要。"""
         return await self.verifier.evaluate(
             state, state.team_results, self.tool_registry.agent_written_files
         )
 
     async def replan(self, step: Step, team_result: TeamResult, state: AgentState) -> list[Step]:
-        """顶层局部重规划，失败时返回空列表。"""
         try:
             new_steps = await self.planner.replan(step, team_result.output, state)
         except Exception as e:
@@ -375,18 +341,16 @@ class ReactAgent:
     # ── Memory 接口 ─────────────────────────────────────────────────────────
 
     async def inject_memory_context(self, state: AgentState) -> None:
-        """注入 L0 上下文到 Planner（Phase 3 已实现）。"""
         try:
-            ctx = self.context_builder.build(state.session_id)
+            ctx = await self.context_builder.build(state.session_id)
             self.planner.system_prompt = ctx.system_prompt
             logger.debug("上下文注入完成，token_estimate=%d", ctx.token_estimate)
         except Exception as e:
             logger.warning("上下文注入失败，跳过：%s", e)
 
     async def consolidate_memory(self, state: AgentState) -> None:
-        """整合会话记忆（Phase 3 已实现）。"""
         try:
-            await self.memory_manager.consolidate_session(state)
+            await self.consolidator.consolidate(state)
             logger.debug("记忆整合完成，session=%s", state.session_id)
         except Exception as e:
             logger.warning("记忆整合失败，跳过：%s", e)
@@ -394,20 +358,11 @@ class ReactAgent:
     # ── 节点工厂（配置驱动） ─────────────────────────────────────────────────
 
     def _create_node(self, step: Step, emit: EmitCallable | None = None) -> Team | SimpleNode:
-        """根据 step 和 agent.yaml nodes 配置创建对应的执行节点。
-
-        优先读取 config.nodes[step.id] 的专属配置；未配置则根据 step.is_simple 决定。
-        每个节点获得独立的 ToolRegistry clone，可在基础工具集上叠加专属技能工具。
-        emit 优先使用传入值（logged_emit），回退到 self.emit（raw）。
-        """
         from sunday.tools.local_loader import load_skill_tools
 
         node_cfg = self.config.nodes.get(step.id)
-
-        # clone 基础工具集，避免节点间互相影响
         registry = self.tool_registry.clone()
 
-        # 叠加节点专属技能工具
         if node_cfg and node_cfg.extra_skills:
             workspace_dir = self.config.agent.workspace_dir
             skills_dir = workspace_dir.parent.parent / "skills"
@@ -419,7 +374,6 @@ class ReactAgent:
                 else:
                     logger.warning("节点 %s 专属技能目录不存在：%s", step.id, skill_dir)
 
-        # 确定节点类型
         node_type = node_cfg.type if node_cfg else "auto"
         use_simple = (
             node_type == "simple"
@@ -450,7 +404,6 @@ class ReactAgent:
 
     @staticmethod
     def _deps_satisfied(step: Step, state: AgentState) -> bool:
-        """检查步骤的所有依赖是否已完成（基于 team_results）。"""
         if not step.depends_on:
             return True
         done_ids = {tr.step_id for tr in state.team_results if tr.passed}
@@ -458,10 +411,6 @@ class ReactAgent:
 
     @staticmethod
     def _detect_dependency_cycle(steps: list[Step]) -> list[str] | None:
-        """Kahn 算法拓扑排序检测循环依赖。
-
-        返回 None 表示无环；返回循环路径列表（包含首尾同一节点）表示存在环。
-        """
         from collections import deque
 
         step_ids = {s.id for s in steps}
@@ -470,7 +419,7 @@ class ReactAgent:
 
         for s in steps:
             for dep in s.depends_on:
-                if dep in step_ids:  # 忽略引用了不存在步骤的依赖
+                if dep in step_ids:
                     graph[dep].append(s.id)
                     in_degree[s.id] += 1
 
@@ -485,8 +434,132 @@ class ReactAgent:
                     queue.append(neighbor)
 
         if visited == len(steps):
-            return None  # 无环
+            return None
 
-        # 找出仍有入度的节点（环的成员），返回其 id 列表作为提示
         cycle_nodes = [sid for sid, deg in in_degree.items() if deg > 0]
         return cycle_nodes
+
+    # ── 日志事件路由 ───────────────────────────────────────────────────────
+
+    async def _log_event(self, session_id: str, event_type: str, data: dict) -> None:
+        """把 emit 事件翻译为语义化 LogEvent，写入 logs/{sid}.jsonl。
+
+        过滤规则：仅记录关键执行事件（plan/step_start/step_result/replan/error 等），
+        跳过 thinking 等噪声状态。
+        """
+        if not session_id:
+            return
+        mapped = _map_emit_to_log(event_type, data)
+        if mapped is None:
+            return
+        event_name, payload = mapped
+        await self.memory.logs.emit(session_id, LogEvent(
+            event=event_name, session_id=session_id, data=payload,
+        ))
+
+    async def _log_session_end(
+        self, state: AgentState, start_ts: datetime, summary: str,
+        team_results: list[TeamResult],
+    ) -> None:
+        if not state.session_id:
+            return
+        total = len(team_results)
+        passed = sum(1 for tr in team_results if tr.passed)
+        outcome = "success" if total and passed == total else (
+            "partial" if passed > 0 else "failed"
+        )
+        await self.memory.logs.emit(state.session_id, LogEvent(
+            event="session_end",
+            session_id=state.session_id,
+            data={
+                "outcome": outcome,
+                "steps_total": total,
+                "steps_passed": passed,
+                "steps_failed": total - passed,
+                "duration_seconds": _elapsed(start_ts),
+                "summary_snippet": summary[:200],
+            },
+        ))
+
+    async def _log_session_abort(self, state: AgentState, start_ts: datetime) -> None:
+        if not state.session_id:
+            return
+        await self.memory.logs.emit(state.session_id, LogEvent(
+            event="session_end",
+            session_id=state.session_id,
+            data={"outcome": "aborted", "duration_seconds": _elapsed(start_ts)},
+        ))
+
+    async def _log_session_error(
+        self, state: AgentState, start_ts: datetime, error: Exception,
+    ) -> None:
+        if not state.session_id:
+            return
+        await self.memory.logs.emit(state.session_id, LogEvent(
+            event="session_end",
+            session_id=state.session_id,
+            data={
+                "outcome": "error",
+                "error": str(error),
+                "duration_seconds": _elapsed(start_ts),
+            },
+        ))
+
+
+def _elapsed(start_ts: datetime) -> float:
+    return round((datetime.now(timezone.utc) - start_ts).total_seconds(), 2)
+
+
+def _map_emit_to_log(event_type: str, data: dict) -> tuple[str, dict] | None:
+    """把 emit 事件映射为 logs/ 写入用的语义化事件 + 字段裁剪。
+
+    Gateway 模式 stream.jsonl 已记录原始事件流；这里输出的是用于人工 / jq
+    分析的精简版（CLI 与 Gateway 行为一致）。
+    """
+    if event_type == "status":
+        status_val = data.get("status", "")
+        if status_val.startswith("executing:"):
+            return ("step_start", {
+                "step_id": status_val.split(":", 1)[1],
+                "intent": data.get("intent", ""),
+                "node_type": data.get("node_type", ""),
+            })
+        if status_val == "replanning":
+            return ("replan", {
+                "step_id": data.get("step_id", ""),
+                "replan_count": data.get("replan_count"),
+                "max_replans": data.get("max_replans"),
+                "failure_reason": data.get("failure_reason", ""),
+            })
+        return None
+    if event_type == "plan":
+        return ("plan", {
+            "goal": data.get("goal", ""),
+            "steps": data.get("steps", []),
+        })
+    if event_type == "step_result":
+        return ("step_result", {
+            "step_id": data.get("step_id", ""),
+            "status": data.get("status", ""),
+            "verified": data.get("verified"),
+            "verify_reason": data.get("verify_reason", ""),
+            "duration_ms": data.get("duration_ms"),
+        })
+    if event_type == "sub_step_result":
+        return ("sub_step_result", {
+            "parent_step_id": data.get("parent_step_id", ""),
+            "sub_step_id": data.get("sub_step_id", ""),
+            "status": data.get("status", ""),
+            "verified": data.get("verified"),
+            "verify_reason": data.get("verify_reason", ""),
+        })
+    if event_type == "team_error":
+        return ("team_error", {
+            "step_id": data.get("step_id", ""),
+            "phase": data.get("phase", ""),
+            "sub_step_id": data.get("sub_step_id", ""),
+            "error": data.get("error", ""),
+        })
+    if event_type == "error":
+        return ("error", {"message": data.get("message", "")})
+    return None

@@ -1,28 +1,26 @@
-"""runtime_rules 解析器单元测试 — 静默回退、节切割、列表写法兼容。"""
+"""runtime_rules 解析器单元测试 — 静默回退、节切割、列表写法兼容。
+
+解析器自 Phase 4 起整合进 LocalWorkspaceClient（src/sunday/memory/local/workspace.py），
+本套测试直接覆盖纯函数 parse_runtime_rules / _builtin_rules。
+"""
 from __future__ import annotations
 
-from pathlib import Path
+import pytest
 
-from sunday.memory.runtime_rules import (
-    RuntimeRules,
-    load_rules,
-    parse_rules,
-)
+from sunday.memory.local import LocalMemoryClient
+from sunday.memory.local.workspace import _builtin_rules, parse_runtime_rules
+from sunday.memory.models import RuntimeRules
+
+# 兼容旧调用名：测试体保留下文使用 parse_rules 名字
+parse_rules = parse_runtime_rules
 
 
 # ── 静默回退 ────────────────────────────────────────────────────────────────
 
-def test_load_rules_missing_file_returns_builtin(tmp_path: Path):
-    """workspace 下没有 RUNTIME_RULES.md 时，返回内置默认，不抛错。"""
-    rules = load_rules(tmp_path)
+def test_builtin_rules_returns_nonempty():
+    rules = _builtin_rules()
     assert isinstance(rules, RuntimeRules)
-    assert rules.realtime_keywords  # 非空
-    assert rules.subject_min_output_chars == 200
-
-
-def test_load_rules_none_workspace_returns_builtin():
-    rules = load_rules(None)
-    assert rules.realtime_keywords  # 非空
+    assert rules.realtime_keywords
     assert rules.subject_min_output_chars == 200
 
 
@@ -110,14 +108,46 @@ def test_parse_threshold_falls_back_when_no_int():
     assert rules.subject_min_output_chars == 200
 
 
-# ── 集成：从真实文件读 ──────────────────────────────────────────────────────
+# ── 集成：从真实文件读（走 LocalMemoryClient.workspace）──────────────────
 
-def test_load_rules_from_workspace_file(tmp_path: Path):
-    (tmp_path / "RUNTIME_RULES.md").write_text(
+@pytest.mark.asyncio
+async def test_workspace_runtime_rules_from_disk(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "RUNTIME_RULES.md").write_text(
         "## 时间敏感关键词\n调研, 上市\n\n"
         "## 主题敏感最小输出长度\n\n300\n",
         encoding="utf-8",
     )
-    rules = load_rules(tmp_path)
+    client = LocalMemoryClient(
+        sessions_dir=tmp_path / "s",
+        memory_dir=tmp_path / "m",
+        log_dir=tmp_path / "l",
+        workspace_dir=workspace,
+        run_janitor=False,
+    )
+    try:
+        rules = await client.workspace.read_runtime_rules()
+    finally:
+        await client.aclose()
     assert rules.realtime_keywords == ["调研", "上市"]
     assert rules.subject_min_output_chars == 300
+
+
+@pytest.mark.asyncio
+async def test_workspace_runtime_rules_falls_back_when_missing(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    client = LocalMemoryClient(
+        sessions_dir=tmp_path / "s",
+        memory_dir=tmp_path / "m",
+        log_dir=tmp_path / "l",
+        workspace_dir=workspace,
+        run_janitor=False,
+    )
+    try:
+        rules = await client.workspace.read_runtime_rules()
+    finally:
+        await client.aclose()
+    assert rules.realtime_keywords  # 内置非空
+    assert rules.subject_min_output_chars == 200

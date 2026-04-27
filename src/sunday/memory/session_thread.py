@@ -1,10 +1,10 @@
 """会话主线（session_thread）增量维护
 
 每轮 turn 结束后调用 `update_session_thread()`：用轻量 LLM 调用把本轮 user_input +
-plan.goal + output 精要化，与 meta.json 里已有的 session_thread 增量合并。
+plan.goal + output 精要化，与 session_thread（持久化在 meta.json）增量合并。
 
-session_thread 的作用是让后续轮次的 Planner 能识别"当前任务是主线延续"，避免把每
-一轮当作独立任务重新规划。
+session_thread 让后续轮次的 Planner 能识别"当前任务是主线延续"，避免把每一轮
+当作独立任务重新规划。
 
 失败静默：LLM/JSON 异常均吞掉，不影响用户主路径（主线缺失只是降级为无主线拼接）。
 """
@@ -15,9 +15,11 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from sunday.agent.models import SessionThread
+
 if TYPE_CHECKING:
     from sunday.config import SundayConfig
-    from sunday.gateway.session import SessionManager
+    from sunday.memory.client import MemoryClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +30,10 @@ _USER_INPUT_LIMIT = 800
 async def update_session_thread(
     session_id: str,
     turn_buffer: dict,
-    session_mgr: "SessionManager",
+    client: "MemoryClient",
     config: "SundayConfig",
 ) -> None:
-    """用 LLM 把本轮信息增量合并进 session_thread，持久化到 meta.json。
+    """用 LLM 把本轮信息增量合并进 session_thread。
 
     只有 turn_buffer.outcome == "success" 时才更新（aborted/error 不污染主线）。
     """
@@ -40,9 +42,9 @@ async def update_session_thread(
 
     from sunday.agent.llm_client import LLMClient
 
-    prev_thread = session_mgr.get_session_thread(session_id) or {}
-    prev_summary = prev_thread.get("summary", "")
-    prev_entities = prev_thread.get("key_entities", []) or []
+    prev_thread = await client.sessions.get_thread(session_id)
+    prev_summary = prev_thread.summary if prev_thread else ""
+    prev_entities = list(prev_thread.key_entities) if prev_thread else []
 
     user_input = (turn_buffer.get("user_input") or "")[:_USER_INPUT_LIMIT]
     plan = turn_buffer.get("plan") or {}
@@ -81,7 +83,6 @@ async def update_session_thread(
 
     new_summary = (data.get("summary") or "").strip() or prev_summary
     new_entities_raw = data.get("key_entities") or prev_entities
-    # 去重保序
     seen: set[str] = set()
     new_entities: list[str] = []
     for e in new_entities_raw:
@@ -93,13 +94,13 @@ async def update_session_thread(
         seen.add(e)
         new_entities.append(e)
 
-    new_thread = {
-        "summary": new_summary,
-        "key_entities": new_entities,
-        "updated_at_turn": turn_buffer.get("turn_id", ""),
-    }
+    new_thread = SessionThread(
+        summary=new_summary,
+        key_entities=new_entities,
+        updated_at_turn=turn_buffer.get("turn_id", ""),
+    )
     try:
-        await session_mgr.save_session_thread(session_id, new_thread)
+        await client.sessions.save_thread(session_id, new_thread)
     except Exception:
         logger.exception("session_thread 写入失败（不影响用户）")
 

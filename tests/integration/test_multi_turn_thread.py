@@ -24,8 +24,8 @@ def _prepare_configs(tmp_path):
     update_session_thread 调用 `config.load_prompt("thread_update")` 会走 SUNDAY_CONFIGS_DIR，
     所以必须与 agent.yaml 放同一目录。
     """
-    from pathlib import Path
     import shutil
+    from pathlib import Path
 
     configs_dir = tmp_path / "configs"
     prompts_dir = configs_dir / "prompts"

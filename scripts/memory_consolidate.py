@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""每日记忆整合脚本 — 供 cron 调用。
+"""每日记忆维护脚本 — 触发一次 TTL 清理。
 
 用法：
   uv run python scripts/memory_consolidate.py
@@ -23,21 +23,19 @@ logger = logging.getLogger("memory_consolidate")
 
 
 async def main() -> None:
+    from sunday.bootstrap import build_memory_client
     from sunday.config import settings
-    from sunday.memory.janitor import MemoryJanitor
 
     cfg = settings.sunday
-    workspace_dir = cfg.agent.workspace_dir
-    retention_days = cfg.memory.log_retention_days
+    logger.info("开始记忆维护，memory_dir=%s", cfg.agent.memory_dir)
 
-    logger.info("开始记忆整合，workspace=%s", workspace_dir)
-
-    # 清理过期日志
-    janitor = MemoryJanitor(workspace_dir, retention_days=retention_days)
-    stats = janitor.run()
-    logger.info("日志清理完成：删除 %d 个，保留 %d 个", stats["deleted"], stats["kept"])
-
-    logger.info("记忆整合完成")
+    # 关闭后台 janitor，由本脚本一次性触发扫描
+    client = build_memory_client(cfg, run_janitor=False)
+    try:
+        stats = client.knowledge._sweep_expired_daily()
+        logger.info("日志清理完成：删除 %d 个，保留 %d 个", stats["deleted"], stats["kept"])
+    finally:
+        await client.aclose()
 
 
 if __name__ == "__main__":

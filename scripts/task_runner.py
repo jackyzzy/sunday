@@ -42,7 +42,7 @@ class TaskRunner:
     async def run_task(self, name: str, agent_loop=None) -> str:
         """运行指定任务，返回执行结果。
 
-        agent_loop 可注入替代 AgentLoop（用于测试）。
+        agent_loop 可注入替代 ReactAgent（用于测试）。
         """
         task_cfg = self.get_task(name)
         description = task_cfg.description
@@ -62,56 +62,31 @@ class TaskRunner:
         if agent_loop is not None:
             return await agent_loop.run(state) or ""
 
-        # 构建完整 AgentLoop
-        from sunday.agent.executor import Executor
-        from sunday.agent.loop import AgentLoop
-        from sunday.agent.planner import Planner
-        from sunday.agent.verifier import Verifier
+        from sunday.bootstrap import build_agent_loop, build_memory_client
         from sunday.gateway.protocol import EventType
-        from sunday.memory.context import ContextBuilder
-        from sunday.memory.manager import MemoryManager
-        from sunday.skills.loader import SkillLoader
-        from sunday.tools.cli_tool import register_cli_tools
-        from sunday.tools.registry import ToolRegistry
 
-        cfg = self._settings.sunday  # SundayConfig
-        workspace_dir = cfg.agent.workspace_dir
-
-        registry = ToolRegistry(cfg, confirmation_handler=_cli_confirm)
-        register_cli_tools(registry)
-        from sunday.tools.local_loader import load_user_tools
-        load_user_tools(workspace_dir, registry)
-
-        skill_loader = SkillLoader(
-            project_skills_dir=Path(__file__).parent.parent / "skills",
-            user_skills_dir=workspace_dir / "skills",
-        )
-        skill_loader.discover()
-
-        context_builder = ContextBuilder(workspace_dir, skill_loader=skill_loader, config=cfg)
-        memory_manager = MemoryManager(workspace_dir, config=cfg)
+        cfg = self._settings.sunday
 
         async def emit(sid, event_type, data):
             if event_type == EventType.STREAM:
                 print(data.get("delta", ""), end="", flush=True)
             elif event_type == EventType.STATUS:
-                state_name = data.get("state", "")
+                state_name = data.get("state", "") or data.get("status", "")
                 if state_name == "thinking":
                     print("\n[思考中...]", flush=True)
                 elif state_name.startswith("executing"):
                     print(f"\n[执行：{state_name}]", flush=True)
 
-        loop = AgentLoop(
-            planner=Planner(cfg),
-            executor=Executor(cfg, tool_registry=registry),
-            verifier=Verifier(cfg),
-            emit=emit,
-            context_builder=context_builder,
-            memory_manager=memory_manager,
-            config=cfg,
-        )
-
-        result = await loop.run(state)
+        client = build_memory_client(cfg)
+        try:
+            loop = build_agent_loop(
+                cfg, emit, mode="cli",
+                confirmation_handler=_cli_confirm,
+                memory_client=client,
+            )
+            result = await loop.run(state)
+        finally:
+            await client.aclose()
         print()
         return result or ""
 

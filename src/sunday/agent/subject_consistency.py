@@ -16,7 +16,7 @@ from sunday.agent.llm_client import LLMClient
 from sunday.agent.utils import strip_code_fence
 
 if TYPE_CHECKING:
-    from sunday.config import ModelConfig, QualityConfig, SundayConfig
+    from sunday.config import ModelConfig, SundayConfig
 
 logger = logging.getLogger(__name__)
 

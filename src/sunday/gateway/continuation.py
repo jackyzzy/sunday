@@ -46,7 +46,7 @@ def resolve_continuation(
     """扫描本 session 的 stream 事件，提取"最早的实质性任务" + "最近的失败原因"。
 
     参数：
-      - events：来自 SessionManager.load_history 的事件列表（按时间正序）
+      - events：来自 MemoryClient.sessions.load_events 的事件列表（按时间正序）
       - current_text：当前轮的 user 输入（连续词本身，用于排除）
 
     返回：

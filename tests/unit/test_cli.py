@@ -48,7 +48,6 @@ def test_gateway_start_already_running(runner, tmp_path):
     """gateway start：已运行时输出提示"""
     pid_file = tmp_path / "gateway.pid"
     pid_file.write_text("99999")
-    import os
     with (
         patch("sunday.cli._gateway_pid_file", return_value=pid_file),
         patch("os.kill", return_value=None),

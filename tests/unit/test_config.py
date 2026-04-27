@@ -214,7 +214,6 @@ def test_sunday_config_file_missing_raises(tmp_path):
 
 def test_get_api_key_via_explicit_env():
     """api_key_env 显式指定时，从对应环境变量读取 key（忽略 provider 映射）"""
-    import os
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("DEEPSEEK_API_KEY", "sk-deepseek-test")
         mp.setenv("OPENAI_API_KEY", "")

@@ -18,13 +18,14 @@ from typing import TYPE_CHECKING
 
 from sunday.agent.fact_check import ToolRegistryLike, VerifiedFact, maybe_fact_check
 from sunday.agent.llm_client import LLMClient
-from sunday.agent.models import THINKING_BUDGET, AgentState, Plan, Step, ThinkingLevel
+from sunday.agent.models import THINKING_BUDGET, AgentState, Plan, Step
 from sunday.agent.realtime_hints import classify, format_for_plan_prompt
 from sunday.agent.utils import EmitCallable, noop_emit, strip_code_fence
 from sunday.gateway.protocol import EventType
 
 if TYPE_CHECKING:
     from sunday.config import ModelConfig, SundayConfig
+    from sunday.memory.models import RuntimeRules
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,15 @@ class Planner:
     规划阶段使用低温度（0.3），禁止调用外部工具。
     """
 
-    def __init__(self, config: "SundayConfig", system_prompt: str = "") -> None:
+    def __init__(
+        self,
+        config: "SundayConfig",
+        system_prompt: str = "",
+        runtime_rules: "RuntimeRules | None" = None,
+    ) -> None:
         self.config = config
         self.system_prompt = system_prompt  # 由 ContextBuilder 注入
+        self._runtime_rules = runtime_rules  # 由 ReactAgent 通过 client.workspace 预加载
         self._plan_prompt: str | None = None
         self._replan_prompt: str | None = None
         self._sub_replan_prompt: str | None = None
@@ -155,10 +162,7 @@ class Planner:
         # ── REALTIME_HINTS：合成"实时数据需求"提示注入 plan prompt ──
         hints_context = ""
         if quality.realtime_hints.enabled:
-            hints = classify(
-                state.task, claims=claims,
-                workspace_dir=self.config.agent.workspace_dir,
-            )
+            hints = classify(state.task, claims=claims, rules=self._runtime_rules)
             if hints.has_signal:
                 await emit(state.session_id, EventType.PLAN_REALTIME_HINTS, {
                     "phase": "done",

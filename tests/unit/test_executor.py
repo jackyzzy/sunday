@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import yaml
 
-from sunday.agent.executor import Executor, MaxStepsError, RepetitionError
+from sunday.agent.executor import Executor, RepetitionError
 from sunday.agent.models import AgentState, Step, StepStatus
 
 

@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
 
-from sunday.agent.models import AgentState, StepStatus
-from sunday.agent.planner import THINKING_BUDGET, Planner, ThinkingLevel
+from sunday.agent.models import THINKING_BUDGET, AgentState, StepStatus, ThinkingLevel
+from sunday.agent.planner import Planner
 from sunday.agent.utils import strip_code_fence
 
 
@@ -285,7 +285,7 @@ def test_strip_code_fence_no_fence():
 
 async def test_replan_handles_markdown_wrapped_json(tmp_path):
     """replan 正确处理 markdown code block 包裹的 JSON"""
-    from sunday.agent.models import Plan, Step, StepResult
+    from sunday.agent.models import Plan, Step
 
     settings = _make_settings(tmp_path)
     planner = Planner(settings.sunday)
@@ -313,7 +313,7 @@ async def test_replan_handles_markdown_wrapped_json(tmp_path):
 
 async def test_replan_handles_empty_response(tmp_path):
     """replan 响应为空时返回空列表，不崩溃"""
-    from sunday.agent.models import Plan, Step, StepResult
+    from sunday.agent.models import Plan, Step
 
     settings = _make_settings(tmp_path)
     planner = Planner(settings.sunday)

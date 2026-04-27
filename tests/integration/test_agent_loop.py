@@ -1,6 +1,6 @@
-"""T2-5 验证：ReactAgent 集成测试（mock LLM，无真实 API）
+"""ReactAgent 集成测试（mock LLM + mock MemoryClient，无真实 API/IO）
 
-架构说明：ReactAgent 通过 Team 执行每个顶层 Step，不直接调用 executor/verifier。
+ReactAgent 通过 Team 执行每个顶层 Step，不直接调用 executor/verifier。
 测试通过 patch('sunday.agent.react_agent.Team') 来隔离 Team 行为。
 """
 from __future__ import annotations
@@ -10,12 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
 
-from sunday.agent.executor import Executor, MaxStepsError
-from sunday.agent.loop import AgentLoop  # 向后兼容别名，等价于 ReactAgent
-from sunday.agent.models import AgentState, Plan, Step, StepResult, StepStatus, TeamResult
+from sunday.agent.models import AgentState, Plan, Step, TeamResult
 from sunday.agent.planner import Planner
 from sunday.agent.react_agent import ReactAgent
-from sunday.agent.verifier import Verifier, VerifyResult
+from sunday.agent.verifier import Verifier
 
 
 def _make_settings(tmp_path, provider="anthropic"):
@@ -44,14 +42,32 @@ def _make_team_result(step_id: str, passed: bool = True) -> TeamResult:
     return TeamResult(step_id=step_id, passed=passed, output=f"{step_id} 输出")
 
 
+def _mock_memory_client() -> MagicMock:
+    """构造满足 ReactAgent 调用需求的 MemoryClient mock。"""
+    client = MagicMock()
+    client.workspace.read_runtime_rules = AsyncMock(return_value=None)
+    client.logs.emit = AsyncMock(return_value=None)
+    return client
+
+
 def _make_mock_agent(plan, evaluate_return="任务完成！"):
-    """构造一个测试用 ReactAgent，使用 __new__ 绕过构造函数，手动注入 mock 组件。"""
+    """通过 __new__ 绕过构造函数，手动注入 mock 组件。"""
     planner = MagicMock(spec=Planner)
     planner.think_and_plan = AsyncMock(return_value=plan)
     planner.system_prompt = ""
+    planner._runtime_rules = None
+    planner.replan = AsyncMock(return_value=[])
 
     verifier = MagicMock(spec=Verifier)
     verifier.evaluate = AsyncMock(return_value=evaluate_return)
+
+    context_builder = MagicMock()
+    context_builder.build = AsyncMock(return_value=MagicMock(
+        system_prompt="", token_estimate=0,
+    ))
+
+    consolidator = MagicMock()
+    consolidator.consolidate = AsyncMock(return_value=None)
 
     agent = ReactAgent.__new__(ReactAgent)
     agent.config = MagicMock()
@@ -63,23 +79,25 @@ def _make_mock_agent(plan, evaluate_return="任务完成！"):
     agent.mode = "test"
     agent.planner = planner
     agent.verifier = verifier
+    agent.context_builder = context_builder
+    agent.consolidator = consolidator
+    agent.memory = _mock_memory_client()
     agent.tool_registry = MagicMock()
-    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
+    agent.tool_registry.probe_all = AsyncMock()
     agent.tool_registry.clone = MagicMock(return_value=MagicMock())
     agent.tool_registry.set_report_dir = MagicMock()
-    agent.context_builder = None
-    agent.memory_manager = None
+    agent.tool_registry.agent_written_files = []
+    agent.session_report_dir = None
     return agent, planner, verifier
 
 
 # ── 基本流程 ──────────────────────────────────────────────────────────────────
 
 async def test_loop_completes_simple_task(tmp_path):
-    """完整循环：plan → Team × 2 → evaluate → 返回摘要"""
     _make_settings(tmp_path)
 
     plan = _make_plan(2)
-    agent, planner, verifier = _make_mock_agent(plan, evaluate_return="任务完成！")
+    agent, planner, _ = _make_mock_agent(plan, evaluate_return="任务完成！")
     state = AgentState(session_id="sess", task="测试任务")
 
     team_results = [_make_team_result("step_1"), _make_team_result("step_2")]
@@ -96,11 +114,10 @@ async def test_loop_completes_simple_task(tmp_path):
 
 
 async def test_loop_emit_called(tmp_path):
-    """emit 回调在关键节点被调用"""
     _make_settings(tmp_path)
 
     plan = _make_plan(1)
-    agent, planner, verifier = _make_mock_agent(plan, evaluate_return="done")
+    agent, _, _ = _make_mock_agent(plan, evaluate_return="done")
 
     emitted = []
 
@@ -125,11 +142,10 @@ async def test_loop_emit_called(tmp_path):
 
 
 async def test_loop_step_result_verified_in_team_result(tmp_path):
-    """team_results 的 passed 字段来自 Team.run 的返回"""
     _make_settings(tmp_path)
 
     plan = _make_plan(1)
-    agent, planner, verifier = _make_mock_agent(plan, evaluate_return="done")
+    agent, _, _ = _make_mock_agent(plan, evaluate_return="done")
     state = AgentState(session_id="sess", task="test")
 
     with patch("sunday.agent.react_agent.Team") as MockTeam:
@@ -144,40 +160,16 @@ async def test_loop_step_result_verified_in_team_result(tmp_path):
 # ── verify 失败触发重规划 ──────────────────────────────────────────────────────
 
 async def test_team_failure_triggers_replan(tmp_path):
-    """Team 执行失败时触发顶层重规划"""
     _make_settings(tmp_path)
 
     plan = _make_plan(2)
     new_steps = [Step(id="step_2_new", intent="新方法", success_criteria="完成")]
 
-    planner = MagicMock(spec=Planner)
-    planner.think_and_plan = AsyncMock(return_value=plan)
-    planner.system_prompt = ""
+    agent, planner, _ = _make_mock_agent(plan, evaluate_return="重规划后完成")
     planner.replan = AsyncMock(return_value=new_steps)
-
-    verifier = MagicMock(spec=Verifier)
-    verifier.evaluate = AsyncMock(return_value="重规划后完成")
-
-    agent = ReactAgent.__new__(ReactAgent)
-    agent.config = MagicMock()
-    agent.config.reasoning.max_steps = 10
-    agent.config.reasoning.max_replans = 5
-    agent.config.agent.log_dir = None
-    agent.config.nodes = {}
-    agent.emit = AsyncMock()
-    agent.mode = "test"
-    agent.planner = planner
-    agent.verifier = verifier
-    agent.tool_registry = MagicMock()
-    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
-    agent.tool_registry.clone = MagicMock(return_value=MagicMock())
-    agent.tool_registry.set_report_dir = MagicMock()
-    agent.context_builder = None
-    agent.memory_manager = None
 
     state = AgentState(session_id="sess", task="test")
 
-    # step_1 通过，step_2 失败触发 replan，step_2_new 通过
     team_results_seq = [
         _make_team_result("step_1", passed=True),
         _make_team_result("step_2", passed=False),
@@ -195,34 +187,11 @@ async def test_team_failure_triggers_replan(tmp_path):
 
 
 async def test_team_failure_no_replan_continues(tmp_path):
-    """Team 失败但重规划返回空时，继续后续步骤"""
     _make_settings(tmp_path)
 
     plan = _make_plan(2)
-    planner = MagicMock(spec=Planner)
-    planner.think_and_plan = AsyncMock(return_value=plan)
-    planner.system_prompt = ""
+    agent, planner, _ = _make_mock_agent(plan, evaluate_return="部分完成")
     planner.replan = AsyncMock(return_value=[])
-
-    verifier = MagicMock(spec=Verifier)
-    verifier.evaluate = AsyncMock(return_value="部分完成")
-
-    agent = ReactAgent.__new__(ReactAgent)
-    agent.config = MagicMock()
-    agent.config.reasoning.max_steps = 10
-    agent.config.reasoning.max_replans = 5
-    agent.config.agent.log_dir = None
-    agent.config.nodes = {}
-    agent.emit = AsyncMock()
-    agent.mode = "test"
-    agent.planner = planner
-    agent.verifier = verifier
-    agent.tool_registry = MagicMock()
-    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
-    agent.tool_registry.clone = MagicMock(return_value=MagicMock())
-    agent.tool_registry.set_report_dir = MagicMock()
-    agent.context_builder = None
-    agent.memory_manager = None
 
     state = AgentState(session_id="sess", task="test")
 
@@ -237,87 +206,35 @@ async def test_team_failure_no_replan_continues(tmp_path):
 # ── 依赖满足检查 ──────────────────────────────────────────────────────────────
 
 async def test_deps_satisfied_skips_unmet(tmp_path):
-    """依赖未满足的步骤被跳过"""
     _make_settings(tmp_path)
 
     step1 = Step(id="step_1", intent="步骤1", success_criteria="")
     step2 = Step(id="step_2", intent="步骤2", depends_on=["step_1"], success_criteria="")
     plan = Plan(goal="测试", steps=[step1, step2])
 
-    planner = MagicMock(spec=Planner)
-    planner.think_and_plan = AsyncMock(return_value=plan)
-    planner.system_prompt = ""
+    agent, planner, _ = _make_mock_agent(plan, evaluate_return="done")
     planner.replan = AsyncMock(return_value=[])
-
-    verifier = MagicMock(spec=Verifier)
-    verifier.evaluate = AsyncMock(return_value="done")
-
-    agent = ReactAgent.__new__(ReactAgent)
-    agent.config = MagicMock()
-    agent.config.reasoning.max_steps = 10
-    agent.config.reasoning.max_replans = 5
-    agent.config.agent.log_dir = None
-    agent.config.nodes = {}
-    agent.emit = AsyncMock()
-    agent.mode = "test"
-    agent.planner = planner
-    agent.verifier = verifier
-    agent.tool_registry = MagicMock()
-    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
-    agent.tool_registry.clone = MagicMock(return_value=MagicMock())
-    agent.tool_registry.set_report_dir = MagicMock()
-    agent.context_builder = None
-    agent.memory_manager = None
 
     state = AgentState(session_id="sess", task="test")
 
     with patch("sunday.agent.react_agent.Team") as MockTeam:
         instance = MockTeam.return_value
-        # step_1 执行并返回 passed=False，step_2 依赖 step_1 passed → 被跳过
+        # step_1 失败 → step_2 因依赖未满足被跳过
         instance.run = AsyncMock(return_value=_make_team_result("step_1", passed=False))
         await agent.run(state)
 
-    # step_2 依赖未满足，Team.run 只被调用了 1 次
     assert instance.run.call_count == 1
 
 
-# ── T3-4：ContextBuilder + MemoryManager 接入 ReactAgent ──────────────────────
+# ── ContextBuilder + Consolidator 接入 ────────────────────────────────────
 
 async def test_loop_injects_context_into_planner(tmp_path):
-    """context_builder.build() 被调用，planner.system_prompt 被设置"""
-    from sunday.memory.context import ContextBuilder
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "memory").mkdir()
-    (workspace / "SOUL.md").write_text("# Soul\n你是 Sunday。")
-
+    """context_builder.build() 被调用，planner.system_prompt 被设置。"""
     plan = _make_plan(1)
-    planner = MagicMock(spec=Planner)
-    planner.think_and_plan = AsyncMock(return_value=plan)
-    planner.system_prompt = ""
-
-    verifier = MagicMock(spec=Verifier)
-    verifier.evaluate = AsyncMock(return_value="done")
-
-    context_builder = ContextBuilder(workspace)
-
-    agent = ReactAgent.__new__(ReactAgent)
-    agent.config = MagicMock()
-    agent.config.reasoning.max_steps = 10
-    agent.config.reasoning.max_replans = 5
-    agent.config.agent.log_dir = None
-    agent.config.nodes = {}
-    agent.emit = AsyncMock()
-    agent.mode = "test"
-    agent.planner = planner
-    agent.verifier = verifier
-    agent.tool_registry = MagicMock()
-    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
-    agent.tool_registry.clone = MagicMock(return_value=MagicMock())
-    agent.tool_registry.set_report_dir = MagicMock()
-    agent.context_builder = context_builder
-    agent.memory_manager = None
+    agent, planner, _ = _make_mock_agent(plan, evaluate_return="done")
+    agent.context_builder.build = AsyncMock(return_value=MagicMock(
+        system_prompt="# Soul\n你是 Sunday。", token_estimate=10,
+    ))
 
     state = AgentState(session_id="s1", task="测试注入")
 
@@ -329,37 +246,10 @@ async def test_loop_injects_context_into_planner(tmp_path):
     assert "你是 Sunday" in planner.system_prompt
 
 
-async def test_loop_calls_memory_consolidate(tmp_path):
-    """memory_manager.consolidate_session 在循环结束后被调用"""
-    from unittest.mock import AsyncMock as AM
-
+async def test_loop_calls_consolidate(tmp_path):
+    """consolidator.consolidate 在循环结束后被调用。"""
     plan = _make_plan(1)
-    planner = MagicMock(spec=Planner)
-    planner.think_and_plan = AsyncMock(return_value=plan)
-    planner.system_prompt = ""
-
-    verifier = MagicMock(spec=Verifier)
-    verifier.evaluate = AM(return_value="done")
-
-    memory_manager = MagicMock()
-    memory_manager.consolidate_session = AM(return_value=None)
-
-    agent = ReactAgent.__new__(ReactAgent)
-    agent.config = MagicMock()
-    agent.config.reasoning.max_steps = 10
-    agent.config.reasoning.max_replans = 5
-    agent.config.agent.log_dir = None
-    agent.config.nodes = {}
-    agent.emit = AsyncMock()
-    agent.mode = "test"
-    agent.planner = planner
-    agent.verifier = verifier
-    agent.tool_registry = MagicMock()
-    agent.tool_registry.probe_all = AsyncMock()  # probe_all 是 async 方法
-    agent.tool_registry.clone = MagicMock(return_value=MagicMock())
-    agent.tool_registry.set_report_dir = MagicMock()
-    agent.context_builder = None
-    agent.memory_manager = memory_manager
+    agent, _, _ = _make_mock_agent(plan, evaluate_return="done")
 
     state = AgentState(session_id="s2", task="记忆整合测试")
 
@@ -368,20 +258,21 @@ async def test_loop_calls_memory_consolidate(tmp_path):
         instance.run = AsyncMock(return_value=_make_team_result("step_1"))
         await agent.run(state)
 
-    memory_manager.consolidate_session.assert_called_once_with(state)
+    agent.consolidator.consolidate.assert_called_once_with(state)
 
 
-async def test_loop_no_context_builder_runs_fine(tmp_path):
-    """不传 context_builder 时循环正常运行（向后兼容）"""
+async def test_loop_logs_session_lifecycle(tmp_path):
+    """session_start + session_end 通过 client.logs.emit 写入。"""
     plan = _make_plan(1)
-    agent, planner, verifier = _make_mock_agent(plan, evaluate_return="done")
-    agent.context_builder = None
-    agent.memory_manager = None
-    state = AgentState(session_id="s3", task="向后兼容测试")
+    agent, _, _ = _make_mock_agent(plan, evaluate_return="done")
+
+    state = AgentState(session_id="s3", task="日志测试")
 
     with patch("sunday.agent.react_agent.Team") as MockTeam:
         instance = MockTeam.return_value
         instance.run = AsyncMock(return_value=_make_team_result("step_1"))
-        result = await agent.run(state)
+        await agent.run(state)
 
-    assert result == "done"
+    events = [call.args[1].event for call in agent.memory.logs.emit.call_args_list]
+    assert "session_start" in events
+    assert "session_end" in events

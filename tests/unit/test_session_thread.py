@@ -1,4 +1,4 @@
-"""update_session_thread 单元测试 —— 轻量 LLM 合并主线。"""
+"""update_session_thread 单元测试 — 通过 MemoryClient 读写 thread。"""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import yaml
 
-from sunday.gateway.session import SessionManager
+from sunday.memory.local import LocalMemoryClient
 from sunday.memory.session_thread import update_session_thread
 
 
@@ -19,7 +19,6 @@ def _make_config(tmp_path):
     config_file.write_text(yaml.dump({
         "model": {"provider": "anthropic", "id": "claude-test"},
     }))
-    # thread_update.md 必须可加载：复用工作区里的真 prompt 文件
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
         "SUNDAY_CONFIGS_DIR": str(Path(__file__).parent.parent.parent / "configs"),
@@ -29,28 +28,36 @@ def _make_config(tmp_path):
 
 
 @pytest.fixture
-def session_mgr(tmp_path):
-    return SessionManager(tmp_path / "sessions")
+async def client(tmp_path):
+    c = LocalMemoryClient(
+        sessions_dir=tmp_path / "sessions",
+        memory_dir=tmp_path / "memory",
+        log_dir=tmp_path / "logs",
+        workspace_dir=tmp_path / "workspace",
+        run_janitor=False,
+    )
+    yield c
+    await c.aclose()
 
 
-async def test_update_skipped_when_outcome_not_success(session_mgr, tmp_path):
-    """outcome != success 时应直接跳过，不触达 LLM，不改 meta.json。"""
+async def test_update_skipped_when_outcome_not_success(client, tmp_path):
     cfg = _make_config(tmp_path)
-    sid = session_mgr.new_session()
+    meta = await client.sessions.create()
+    sid = meta.session_id
     turn = {"turn_id": "t1", "outcome": "error", "user_input": "x", "output": "y"}
 
     with patch("sunday.agent.llm_client.LLMClient.call_text",
                new=AsyncMock(return_value="{}")) as mock_call:
-        await update_session_thread(sid, turn, session_mgr, cfg)
+        await update_session_thread(sid, turn, client, cfg)
 
     mock_call.assert_not_called()
-    assert session_mgr.get_session_thread(sid) is None
+    assert await client.sessions.get_thread(sid) is None
 
 
-async def test_update_first_turn_creates_thread(session_mgr, tmp_path):
-    """首轮：无前序 thread，LLM 返回新 summary + entities → 写入 meta.json。"""
+async def test_update_first_turn_creates_thread(client, tmp_path):
     cfg = _make_config(tmp_path)
-    sid = session_mgr.new_session()
+    meta = await client.sessions.create()
+    sid = meta.session_id
     turn = {
         "turn_id": "t1",
         "outcome": "success",
@@ -62,28 +69,27 @@ async def test_update_first_turn_creates_thread(session_mgr, tmp_path):
         "summary": "围绕 DeepSeek V4 发布展开",
         "key_entities": ["DeepSeek V4"],
     })
-
     with patch("sunday.agent.llm_client.LLMClient.call_text",
                new=AsyncMock(return_value=fake_resp)):
-        await update_session_thread(sid, turn, session_mgr, cfg)
+        await update_session_thread(sid, turn, client, cfg)
 
-    thread = session_mgr.get_session_thread(sid)
+    thread = await client.sessions.get_thread(sid)
     assert thread is not None
-    assert thread["summary"] == "围绕 DeepSeek V4 发布展开"
-    assert thread["key_entities"] == ["DeepSeek V4"]
-    assert thread["updated_at_turn"] == "t1"
+    assert thread.summary == "围绕 DeepSeek V4 发布展开"
+    assert thread.key_entities == ["DeepSeek V4"]
+    assert thread.updated_at_turn == "t1"
 
 
-async def test_update_incremental_merge_dedupes_entities(session_mgr, tmp_path):
-    """已有 thread + 新轮次：实体去重，保留旧条目。"""
+async def test_update_incremental_merge_dedupes_entities(client, tmp_path):
+    from sunday.agent.models import SessionThread
     cfg = _make_config(tmp_path)
-    sid = session_mgr.new_session()
-    # 先埋入已有 thread
-    await session_mgr.save_session_thread(sid, {
-        "summary": "围绕 DeepSeek V4 展开",
-        "key_entities": ["DeepSeek V4"],
-        "updated_at_turn": "t1",
-    })
+    meta = await client.sessions.create()
+    sid = meta.session_id
+    await client.sessions.save_thread(sid, SessionThread(
+        summary="围绕 DeepSeek V4 展开",
+        key_entities=["DeepSeek V4"],
+        updated_at_turn="t1",
+    ))
 
     turn = {
         "turn_id": "t2",
@@ -92,44 +98,41 @@ async def test_update_incremental_merge_dedupes_entities(session_mgr, tmp_path):
         "plan": {"goal": "讨论 DeepSeek V4 对算力基础设施的影响"},
         "output": "算力层 ...",
     }
-    # LLM 返回含重复项，应去重保序
     fake_resp = json.dumps({
         "summary": "围绕 DeepSeek V4 展开，扩展到 AI 算力基础设施",
         "key_entities": ["DeepSeek V4", "AI 算力基础设施", "DeepSeek V4"],
     })
     with patch("sunday.agent.llm_client.LLMClient.call_text",
                new=AsyncMock(return_value=fake_resp)):
-        await update_session_thread(sid, turn, session_mgr, cfg)
+        await update_session_thread(sid, turn, client, cfg)
 
-    thread = session_mgr.get_session_thread(sid)
-    assert thread["key_entities"] == ["DeepSeek V4", "AI 算力基础设施"]
-    assert "算力" in thread["summary"]
-    assert thread["updated_at_turn"] == "t2"
+    thread = await client.sessions.get_thread(sid)
+    assert thread.key_entities == ["DeepSeek V4", "AI 算力基础设施"]
+    assert "算力" in thread.summary
+    assert thread.updated_at_turn == "t2"
 
 
-async def test_update_llm_failure_is_silent(session_mgr, tmp_path):
-    """LLM 调用抛异常时，用户主路径不受影响，meta.json 保持不变。"""
+async def test_update_llm_failure_is_silent(client, tmp_path):
     cfg = _make_config(tmp_path)
-    sid = session_mgr.new_session()
+    meta = await client.sessions.create()
+    sid = meta.session_id
     turn = {
-        "turn_id": "t1",
-        "outcome": "success",
+        "turn_id": "t1", "outcome": "success",
         "user_input": "q", "plan": {"goal": "g"}, "output": "a",
     }
     with patch("sunday.agent.llm_client.LLMClient.call_text",
                new=AsyncMock(side_effect=RuntimeError("network"))):
-        await update_session_thread(sid, turn, session_mgr, cfg)
+        await update_session_thread(sid, turn, client, cfg)
 
-    assert session_mgr.get_session_thread(sid) is None
+    assert await client.sessions.get_thread(sid) is None
 
 
-async def test_update_parses_fenced_json(session_mgr, tmp_path):
-    """LLM 返回 ```json 代码块时也能解析。"""
+async def test_update_parses_fenced_json(client, tmp_path):
     cfg = _make_config(tmp_path)
-    sid = session_mgr.new_session()
+    meta = await client.sessions.create()
+    sid = meta.session_id
     turn = {
-        "turn_id": "t1",
-        "outcome": "success",
+        "turn_id": "t1", "outcome": "success",
         "user_input": "x", "plan": {"goal": "g"}, "output": "o",
     }
     fake_resp = "```json\n" + json.dumps({
@@ -137,24 +140,23 @@ async def test_update_parses_fenced_json(session_mgr, tmp_path):
     }) + "\n```"
     with patch("sunday.agent.llm_client.LLMClient.call_text",
                new=AsyncMock(return_value=fake_resp)):
-        await update_session_thread(sid, turn, session_mgr, cfg)
+        await update_session_thread(sid, turn, client, cfg)
 
-    thread = session_mgr.get_session_thread(sid)
-    assert thread["summary"] == "s"
-    assert thread["key_entities"] == ["E1"]
+    thread = await client.sessions.get_thread(sid)
+    assert thread.summary == "s"
+    assert thread.key_entities == ["E1"]
 
 
-async def test_update_invalid_json_keeps_meta_unchanged(session_mgr, tmp_path):
-    """LLM 返回非 JSON 文本时，meta 不被污染。"""
+async def test_update_invalid_json_keeps_meta_unchanged(client, tmp_path):
     cfg = _make_config(tmp_path)
-    sid = session_mgr.new_session()
+    meta = await client.sessions.create()
+    sid = meta.session_id
     turn = {
-        "turn_id": "t1",
-        "outcome": "success",
+        "turn_id": "t1", "outcome": "success",
         "user_input": "x", "plan": {"goal": "g"}, "output": "o",
     }
     with patch("sunday.agent.llm_client.LLMClient.call_text",
                new=AsyncMock(return_value="这不是 JSON，也没有花括号")):
-        await update_session_thread(sid, turn, session_mgr, cfg)
+        await update_session_thread(sid, turn, client, cfg)
 
-    assert session_mgr.get_session_thread(sid) is None
+    assert await client.sessions.get_thread(sid) is None

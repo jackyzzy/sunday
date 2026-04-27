@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
-from sunday.memory.runtime_rules import RuntimeRules, load_rules
+from sunday.memory.local.workspace import _builtin_rules
+from sunday.memory.models import RuntimeRules
 
 
 @dataclass
@@ -48,14 +48,14 @@ class RealtimeHints:
 def classify(
     task: str,
     claims: list[str] | None = None,
-    workspace_dir: Path | str | None = None,
     rules: RuntimeRules | None = None,
 ) -> RealtimeHints:
     """从 task 与 think 阶段 claims 聚合实时性提示。
 
-    `rules` 给定时优先使用（便于测试注入）；否则从 workspace_dir 加载 RUNTIME_RULES.md。
+    `rules` 给定时优先使用；否则回退内置默认（实际生产路径中由 Planner 提前
+    通过 MemoryClient.workspace.read_runtime_rules() 注入）。
     """
-    effective_rules = rules if rules is not None else load_rules(workspace_dir)
+    effective_rules = rules if rules is not None else _builtin_rules()
     keywords = effective_rules.realtime_keywords
 
     task_kw = _match_keywords(task or "", keywords)

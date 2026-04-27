@@ -245,7 +245,6 @@ class Executor:
     async def _call_llm(
         self, system: str, messages: list, tools: list, model_cfg: "ModelConfig"
     ):
-        from sunday.agent.providers.base import LLMResponse
         return await LLMClient.call(
             model_cfg, messages,
             system=system,
