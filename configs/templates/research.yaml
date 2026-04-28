@@ -1,0 +1,41 @@
+# Task Type: research
+# 信息调研与摘要（区别于 analysis_recommendation：不做推荐排序，重在全面性）
+
+task_type: research
+description: "信息调研、综合与报告（典型：技术调研、市场调研、新闻摘要、行业洞察）"
+
+trigger_hints:
+  - "调研"
+  - "查一下"
+  - "搜集"
+  - "了解"
+  - "现状"
+
+plan_guidance: |
+  调研类任务重在全面性与可信度。规划时优先：明确调研维度 → 多源搜索 → 关键事实
+  交叉验证 → 信息聚合去重。每条关键信息必须有可追溯来源。避免基于训练数据生成
+  当前事实，需通过 web_search/fetch_url 获取实时信息。
+
+steps_scaffold:
+  - role: scope_definition
+    step_type: analysis
+    hint: "明确调研范围、关键问题与维度"
+  - role: data_collection
+    step_type: research
+    hint: "多源搜索（关键词组合 + 多个搜索引擎），保留来源链接"
+  - role: cross_validation
+    step_type: research
+    hint: "对关键事实做交叉验证（至少 2 个独立来源）"
+  - role: aggregation
+    step_type: analysis
+    hint: "信息聚合、去重、按主题组织"
+
+synthesis:
+  enabled: true
+  document_name_hint: "<调研主题>调研报告.md"
+  required_sections:
+    - "执行摘要（核心结论 3~5 条）"
+    - "调研背景与方法（范围、维度、数据源）"
+    - "关键发现（含数据/引用，每条注明来源）"
+    - "详细信息（按主题或维度组织）"
+    - "信息源与可信度评估（来源列表、可信度标注）"

@@ -26,6 +26,7 @@ from sunday.gateway.protocol import EventType
 if TYPE_CHECKING:
     from sunday.config import ModelConfig, SundayConfig
     from sunday.memory.models import RuntimeRules
+    from sunday.templates.loader import TemplateLoader
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +50,12 @@ class Planner:
         config: "SundayConfig",
         system_prompt: str = "",
         runtime_rules: "RuntimeRules | None" = None,
+        templates: "TemplateLoader | None" = None,
     ) -> None:
         self.config = config
         self.system_prompt = system_prompt  # 由 ContextBuilder 注入
         self._runtime_rules = runtime_rules  # 由 ReactAgent 通过 client.workspace 预加载
+        self._templates = templates  # 由 ReactAgent 注入，用于 task_type 模板查询
         self._plan_prompt: str | None = None
         self._replan_prompt: str | None = None
         self._sub_replan_prompt: str | None = None
@@ -171,10 +174,13 @@ class Planner:
                 })
             hints_context = format_for_plan_prompt(hints)
 
+        # 任务类型清单（来自 TemplateLoader），帮 LLM 选择 task_type
+        catalog_context = self._build_task_type_catalog_context()
+
         active_prompt = plan_prompt if plan_prompt is not None else self._get_plan_prompt()
         prompt = (
             task_context + thread_context + history_context + facts_context + hints_context
-            + active_prompt.format(task=state.task)
+            + catalog_context + active_prompt.format(task=state.task)
         )
 
         response = await LLMClient.call(
@@ -186,8 +192,76 @@ class Planner:
         )
 
         plan = self._parse_plan(response.text, thinking=response.thinking)
+
+        # 模板驱动：根据 task_type 模板的 synthesis 配置注入综合整合步骤
+        self._maybe_inject_synthesis_step(plan)
+
         logger.info("规划完成，共 %d 个步骤", len(plan.steps))
         return plan
+
+    def _maybe_inject_synthesis_step(self, plan: Plan) -> None:
+        """按模板配置自动注入 synthesis 步骤。
+
+        条件：plan.task_type 对应的模板存在且 synthesis.enabled=true。
+        synthesis_document_name 缺失时用模板的 document_name_hint 作 fallback。
+        模板的 plan_guidance 作为任务类型专属指导附加到 intent。
+        """
+        if not plan.task_type or not self._templates:
+            return
+        tpl = self._templates.get_task_template(plan.task_type)
+        if not tpl or not tpl.synthesis.enabled:
+            return
+
+        # 文档命名 fallback：LLM 未给名 → 模板提示 → task_type 默认
+        doc_name = plan.synthesis_document_name
+        if not doc_name:
+            doc_name = tpl.synthesis.document_name_hint or f"{plan.task_type}_报告.md"
+            plan.synthesis_document_name = doc_name
+
+        sections = tpl.synthesis.required_sections
+        sections_desc = "；".join(sections) if sections else "综合整合分析结果"
+
+        intent = f"将所有前序步骤的输出整合为单一综合报告：{doc_name}"
+        if tpl.plan_guidance.strip():
+            intent += f"\n\n任务类型专属指导：\n{tpl.plan_guidance.strip()}"
+
+        plan.steps.append(Step(
+            id="step_final_synthesis",
+            step_type="synthesis",
+            intent=intent,
+            expected_output=(
+                f"文件 {doc_name}，内容包含：{sections_desc}"
+            ),
+            success_criteria=(
+                "文档自包含，读者无需查阅其他文件即可获取关键信息；"
+                f"必须包含以下章节：{sections_desc}"
+            ),
+            depends_on=[s.id for s in plan.steps],
+            is_simple=True,
+            requires_realtime_data=False,
+        ))
+
+    def _build_task_type_catalog_context(self) -> str:
+        """构造任务类型清单上下文，注入 plan prompt 帮 LLM 选型。
+
+        从所有已加载模板汇总：task_type、描述、触发关键词、是否产出综合文档。
+        """
+        if not self._templates:
+            return ""
+        types = self._templates.list_task_types()
+        if not types:
+            return ""
+        lines = ["# 可选任务类型清单（请根据任务性质从中选择最匹配的 task_type）"]
+        for tt in sorted(types):
+            tpl = self._templates.get_task_template(tt)
+            if not tpl:
+                continue
+            tag = "产出综合文档" if tpl.synthesis.enabled else "直接输出，无综合文档"
+            hints = "、".join(tpl.trigger_hints[:5]) if tpl.trigger_hints else "—"
+            lines.append(
+                f"- `{tpl.task_type}`：{tpl.description}（{tag}；关键词：{hints}）"
+            )
+        return "\n".join(lines) + "\n\n---\n\n"
 
     async def _identify_uncertain_claims(
         self,
@@ -267,7 +341,12 @@ class Planner:
         except json.JSONDecodeError as e:
             logger.warning("replan 响应 JSON 解析失败（%s），返回空步骤列表。原文：%s", e, plan_text[:200])
             return []
-        return [Step(**s) for s in data.get("steps", [])]
+        new_steps = [Step(**s) for s in data.get("steps", [])]
+        # 继承失败步骤的 step_type，避免重新生成时丢失类型信息
+        for s in new_steps:
+            if s.step_type is None:
+                s.step_type = failed_step.step_type
+        return new_steps
 
     async def sub_replan(
         self,
@@ -318,7 +397,12 @@ class Planner:
         except json.JSONDecodeError as e:
             logger.warning("sub_replan 响应解析失败（%s），原文：%s", e, plan_text[:200])
             return []
-        return [Step(**s) for s in data.get("steps", [])]
+        new_steps = [Step(**s) for s in data.get("steps", [])]
+        # 继承失败子步骤的 step_type
+        for s in new_steps:
+            if s.step_type is None:
+                s.step_type = failed_sub_step.step_type
+        return new_steps
 
     @staticmethod
     def _parse_plan(text: str, thinking: str | None = None) -> Plan:
@@ -344,4 +428,10 @@ class Planner:
                     f"Planner 响应中未找到 JSON 对象，原文：{text[:200]}"
                 )
         steps = [Step(**s) for s in data.get("steps", [])]
-        return Plan(goal=data.get("goal", ""), thinking=thinking, steps=steps)
+        return Plan(
+            goal=data.get("goal", ""),
+            thinking=thinking,
+            steps=steps,
+            task_type=data.get("task_type"),
+            synthesis_document_name=data.get("synthesis_document_name"),
+        )

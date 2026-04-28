@@ -1,0 +1,40 @@
+# Task Type: analysis_recommendation
+# 多方案生成 + 对比 + 推荐 + 详述
+
+task_type: analysis_recommendation
+description: "多方案生成、对比、推荐与详述（典型：路线规划、策略选择、方案评估）"
+
+trigger_hints:
+  - "推荐"
+  - "规划"
+  - "帮我选"
+  - "对比"
+  - "分析方案"
+
+plan_guidance: |
+  此类任务的关键是先生成多个候选方案，做多维评估和排序，然后为最优方案给出
+  详细计划，并附备选方案。规划时优先安排数据收集 → 候选生成 → 评估 → 详述。
+
+steps_scaffold:
+  - role: data_collection
+    step_type: research
+    hint: "收集任务相关的实时数据与背景信息"
+  - role: option_generation
+    step_type: analysis
+    hint: "生成 N 个候选方案"
+  - role: evaluation
+    step_type: analysis
+    hint: "多维度评分与排序"
+  - role: top_detail
+    step_type: analysis
+    hint: "为排名最高的方案生成详细实施计划"
+
+synthesis:
+  enabled: true
+  document_name_hint: "<整体任务主题>分析与推荐.md"
+  required_sections:
+    - "背景与分析框架（任务目标、分析维度、数据来源）"
+    - "候选方案概览（简表：名称、核心特点、主要优缺点）"
+    - "综合评分与排序（多维评分表）"
+    - "推荐方案详情（推荐理由 + 完整实施计划）"
+    - "备选方案精简版（2~3 个备选方案的简化实施计划）"

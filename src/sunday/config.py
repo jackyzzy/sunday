@@ -184,8 +184,19 @@ class ToolUsageAuditConfig(BaseModel):
     enabled: bool = True
 
 
+class SynthesisQualityCheckConfig(BaseModel):
+    """synthesis 步骤的深度质量检查配置（基于 verify_synthesis.md）。
+
+    enabled=true 时，step_type=="synthesis" 的步骤验证使用 verify_synthesis.md
+    做结构完整性 / 内容实质性 / 对比完备性 / 推荐合理性 / 细节充分性 / 自包含性
+    六维审查，失败时触发 replan 重新生成。
+    """
+
+    enabled: bool = True
+
+
 class QualityConfig(BaseModel):
-    """质量控制开关：事实核查 / 主题一致性 / 最终步骤锚定 / 实时性识别 / 未联网打标 / 工具审计"""
+    """质量控制开关：事实核查 / 主题一致性 / 最终步骤锚定 / 实时性识别 / 未联网打标 / 工具审计 / 综合质量"""
 
     fact_check: FactCheckConfig = Field(default_factory=FactCheckConfig)
     subject_consistency: SubjectConsistencyConfig = Field(
@@ -199,6 +210,9 @@ class QualityConfig(BaseModel):
         default_factory=OfflineOutputLabelConfig
     )
     tool_usage_audit: ToolUsageAuditConfig = Field(default_factory=ToolUsageAuditConfig)
+    synthesis_quality_check: SynthesisQualityCheckConfig = Field(
+        default_factory=SynthesisQualityCheckConfig
+    )
 
 
 class NodeConfig(BaseModel):
@@ -210,8 +224,8 @@ class NodeConfig(BaseModel):
 
     type: str = "auto"  # auto | team | simple；auto 时由 step.is_simple 决定
     extra_skills: list[str] = Field(default_factory=list)  # 在基础工具集上叠加的技能名
-    # TODO(phase-future): 支持单个节点使用独立模型配置，覆盖全局 model 节
-    model: "ModelConfig | None" = None
+    model: "ModelConfig | None" = None  # 节点专属模型配置（保留扩展位）
+    executor_prompt: str | None = None  # 覆盖该节点 executor 使用的 prompt 名（不含 .md）
 
 
 class AgentConfig(BaseModel):
@@ -252,13 +266,18 @@ class SundayConfig(BaseModel):
     tasks: dict[str, TaskConfig] = Field(default_factory=dict)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)  # step.id → 节点专属配置
 
+    @property
+    def configs_dir(self) -> Path:
+        """返回 configs 目录路径，用于定位 prompts/、templates/ 等子目录。"""
+        return _resolve_configs_dir()
+
     def load_prompt(self, name: str) -> str:
         """从 configs/prompts/{name}.md 加载 prompt 模板。
 
         name 是文件名（不含 .md 后缀），例如 'plan'、'verify' 等。
         文件不存在时抛出 FileNotFoundError。
         """
-        prompt_path = _resolve_configs_dir() / "prompts" / f"{name}.md"
+        prompt_path = self.configs_dir / "prompts" / f"{name}.md"
         if not prompt_path.exists():
             raise FileNotFoundError(
                 f"Prompt 文件未找到：{prompt_path}\n"

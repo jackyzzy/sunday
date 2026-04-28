@@ -56,6 +56,7 @@ class ReactAgent:
     ) -> None:
         from sunday.bootstrap import build_tool_registry
         from sunday.skills.loader import SkillLoader
+        from sunday.templates.loader import TemplateLoader
 
         self.config = config
         self.memory = memory_client
@@ -67,12 +68,19 @@ class ReactAgent:
         # 基础工具集（共享，每个节点 clone 后按需叠加）
         self.tool_registry: ToolRegistry = build_tool_registry(config, confirmation_handler)
 
+        # 任务模板自动加载（与 SkillLoader 同构）
+        workspace_dir = config.agent.workspace_dir
+        self.templates = TemplateLoader(
+            builtin_dir=config.configs_dir / "templates",
+            user_dir=workspace_dir / "templates",
+        )
+        self.templates.discover()
+
         # 顶层规划器与评估器
-        self.planner = Planner(config)
+        self.planner = Planner(config, templates=self.templates)
         self.verifier = Verifier(config)
 
         # 上下文与记忆整合（全部走 MemoryClient）
-        workspace_dir = config.agent.workspace_dir
         skill_loader = SkillLoader(
             project_skills_dir=workspace_dir.parent.parent / "skills",
             user_skills_dir=workspace_dir / "skills",
@@ -91,16 +99,25 @@ class ReactAgent:
         """确保运行时目录结构完整，首次运行时从项目模板复制 L0/L1 初始文件。"""
         import shutil
 
-        template_dir = workspace_dir.parent.parent / "workspace"
+        # 项目模板位于 <project_root>/workspace/，与 configs/ 同级；
+        # 用 configs_dir 锚定项目根，即使用户把 workspace_dir 改到任意路径也能正确定位
+        template_dir = config.configs_dir.parent / "workspace"
 
         workspace_dir.mkdir(parents=True, exist_ok=True)
+        # L0 用户配置文件（SOUL/AGENTS/TOOLS/RUNTIME_RULES）：从项目模板首次复制
         if template_dir.is_dir():
-            for fname in ("SOUL.md", "AGENTS.md", "TOOLS.md"):
+            for fname in ("SOUL.md", "AGENTS.md", "TOOLS.md", "RUNTIME_RULES.md"):
                 dest = workspace_dir / fname
                 src = template_dir / fname
                 if not dest.exists() and src.exists():
                     shutil.copy2(src, dest)
                     logger.info("初始化 L0 文件：%s", dest)
+
+        # 用户扩展点：空目录（即便不放内容也存在，提示用户可在此扩展）
+        # - templates/：用户自定义任务类型模板，覆盖内置（与 SkillLoader 同构）
+        # - skills/：用户自定义技能包
+        (workspace_dir / "templates").mkdir(parents=True, exist_ok=True)
+        (workspace_dir / "skills").mkdir(parents=True, exist_ok=True)
 
         memory_dir = config.agent.memory_dir
         memory_dir.mkdir(parents=True, exist_ok=True)
@@ -380,10 +397,17 @@ class ReactAgent:
             or (node_type == "auto" and step.is_simple)
         )
 
+        executor_prompt_override = node_cfg.executor_prompt if node_cfg else None
         _emit = emit or self.emit
         if use_simple:
-            return SimpleNode(self.config, registry, emit=_emit)
-        return Team(self.config, registry, emit=_emit)
+            return SimpleNode(
+                self.config, registry, emit=_emit,
+                executor_prompt_override=executor_prompt_override,
+            )
+        return Team(
+            self.config, registry, emit=_emit,
+            executor_prompt_override=executor_prompt_override,
+        )
 
     # ── 辅助方法 ────────────────────────────────────────────────────────────
 

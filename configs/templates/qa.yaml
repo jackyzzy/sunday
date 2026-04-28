@@ -1,0 +1,26 @@
+# Task Type: qa
+# 简单问答（直接给答，单步执行）
+
+task_type: qa
+description: "简单事实查询、概念解释、how-to 指南（单步直答，无需多阶段规划）"
+
+trigger_hints:
+  - "是什么"
+  - "怎么"
+  - "为什么"
+  - "什么是"
+  - "怎么做"
+
+plan_guidance: |
+  问答类任务流程极简：直接回答，必要时联网查证。规划时通常仅需 1 步。
+  对时效敏感的问题（涉及最新事件、当前状态等）必须 web_search 后再答，
+  不得凭训练数据猜测。
+
+steps_scaffold:
+  - role: direct_answer
+    step_type: research
+    hint: "必要时联网查证后直接给出答案"
+
+# 问答输出本身即最终回复，不需要 synthesis 文档
+synthesis:
+  enabled: false

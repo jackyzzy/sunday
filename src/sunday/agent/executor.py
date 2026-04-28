@@ -47,12 +47,30 @@ class Executor:
         self,
         config: "SundayConfig",
         tool_registry: ToolRegistryProtocol | None = None,
+        executor_prompt_override: str | None = None,
     ) -> None:
         self.config = config
         self.tool_registry = tool_registry
+        self._executor_prompt_override = executor_prompt_override
         self._system_prompt: str | None = None
 
-    def _get_system_prompt(self) -> str:
+    def _get_system_prompt(self, step_type: str | None = None) -> str:
+        """三级优先级返回 system prompt：
+
+        1. NodeConfig.executor_prompt 静态覆盖（构造时注入）
+        2. step_type 命名约定：executor_{step_type}.md（若文件存在）
+        3. 默认 executor_system.md（缓存）
+        """
+        # 1. 静态覆盖
+        if self._executor_prompt_override:
+            return self.config.load_prompt(self._executor_prompt_override)
+        # 2. step_type 命名约定
+        if step_type:
+            try:
+                return self.config.load_prompt(f"executor_{step_type}")
+            except FileNotFoundError:
+                pass  # fallback 到默认
+        # 3. 默认 prompt（仅默认路径走缓存）
         if self._system_prompt is None:
             self._system_prompt = self.config.load_prompt("executor_system")
         return self._system_prompt
@@ -84,7 +102,7 @@ class Executor:
         max_steps = self.config.reasoning.max_react_iteration
         provider = get_provider(model_cfg.provider)
 
-        system = self._get_system_prompt().format(
+        system = self._get_system_prompt(step.step_type).format(
             intent=step.intent,
             expected_output=step.expected_output,
             success_criteria=step.success_criteria,

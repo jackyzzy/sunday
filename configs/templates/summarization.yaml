@@ -1,0 +1,37 @@
+# Task Type: summarization
+# 总结归纳（基于已有内容做精炼，区别于 research：不主动调研）
+
+task_type: summarization
+description: "总结归纳已有文本/数据（典型：长文档总结、会议纪要、文献综述）"
+
+trigger_hints:
+  - "总结"
+  - "摘要"
+  - "归纳"
+  - "概括"
+  - "要点"
+
+plan_guidance: |
+  总结类任务基于已提供的输入做精炼，不需要主动调研。规划时优先：解析输入 →
+  提取核心要点 → 组织摘要。重点是忠实于原文、不引入额外信息。引用关键原文时
+  应注明出处（章节/页码/段落）。
+
+steps_scaffold:
+  - role: input_parsing
+    step_type: research
+    hint: "解析输入（文档/对话/数据），结构化为可处理的形式"
+  - role: extraction
+    step_type: analysis
+    hint: "提取核心要点（按重要性排序）"
+  - role: composition
+    step_type: analysis
+    hint: "组织摘要（详略分层）"
+
+synthesis:
+  enabled: true
+  document_name_hint: "<原文主题>摘要.md"
+  required_sections:
+    - "TL;DR（一句话核心总结）"
+    - "核心要点（3~5 条 bullet point）"
+    - "详细分析（按主题或时间线展开）"
+    - "关键引用（带原文位置/出处）"

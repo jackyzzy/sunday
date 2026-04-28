@@ -1,0 +1,33 @@
+# Task Type: creative
+# 创意写作、设计、起名（输出本身即终态，无需综合文档）
+
+task_type: creative
+description: "创意写作、设计、起名、文案、故事（自由度高，重风格与创意）"
+
+trigger_hints:
+  - "写"
+  - "创作"
+  - "起名"
+  - "写一首"
+  - "设计"
+  - "文案"
+
+plan_guidance: |
+  创作类任务自由度高，不需要数据收集与多步分析。规划时优先：构思方向 → 起草 →
+  润色。每一步使用 creative 类型 executor。允许较高的发挥空间，但要紧扣用户的
+  风格与场景需求。
+
+steps_scaffold:
+  - role: ideation
+    step_type: creative
+    hint: "头脑风暴 2~3 个不同方向 / 风格"
+  - role: drafting
+    step_type: creative
+    hint: "选定方向后起草完整内容"
+  - role: polishing
+    step_type: creative
+    hint: "润色、调整韵律 / 节奏 / 措辞"
+
+# 创作类输出本身即最终交付物，不需要额外 synthesis 文档
+synthesis:
+  enabled: false

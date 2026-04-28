@@ -1,0 +1,43 @@
+# Task Type: code
+# 代码生成、调试、重构（强调可执行性验证）
+
+task_type: code
+description: "代码生成、调试、重构、生成测试、API 集成（强调可执行性与依赖明确）"
+
+trigger_hints:
+  - "写代码"
+  - "实现"
+  - "修复"
+  - "重构"
+  - "bug"
+  - "脚本"
+
+plan_guidance: |
+  代码任务的关键是可执行性与正确性。规划时优先：理解现有代码与需求 → 接口/数据
+  结构设计 → 编码 → 运行验证（单元测试或示例输入）。明确依赖、版本、运行环境。
+  涉及修改现有文件时，先 read_file 读取上下文再修改，不得凭空生成。
+
+steps_scaffold:
+  - role: context_understanding
+    step_type: research
+    hint: "读现有代码 / 理解需求边界 / 列依赖"
+  - role: design
+    step_type: analysis
+    hint: "接口、数据结构、模块划分；列出关键决策"
+  - role: implementation
+    step_type: code
+    hint: "编码（含必要注释）"
+  - role: validation
+    step_type: code
+    hint: "运行 / 测试验证；输出实际运行结果"
+
+synthesis:
+  enabled: true
+  document_name_hint: "<功能名>实现说明.md"
+  required_sections:
+    - "需求与设计要点（背景、目标、关键决策）"
+    - "实现思路（模块划分、核心算法/流程）"
+    - "代码主体（完整代码片段或文件清单）"
+    - "使用方法与示例（调用方式、示例输入/输出）"
+    - "测试与边界情况（已覆盖场景、运行结果）"
+    - "已知限制与后续优化方向"

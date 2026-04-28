@@ -1,0 +1,28 @@
+# Step Type Registry（声明项目支持的步骤类型，供发现和文档用途）
+#
+# Prompt 路由由命名约定驱动，不依赖此文件：
+#   - Executor → configs/prompts/executor_{step_type}.md（缺失则 fallback 到 executor_system.md）
+#   - Verifier → configs/prompts/verify_{step_type}.md（缺失则 fallback 到 verify.md）
+#
+# 用户新增 step_type：在此注册（可选） + 创建对应 prompt 文件即可，无需改代码。
+
+step_types:
+  research:
+    description: "信息收集与搜索：web_search、fetch_url、数据调研"
+    notes: "专属 prompt：executor_research.md（已提供）"
+
+  analysis:
+    description: "分析与评估：对比已有数据、评分、排序"
+    notes: "专属 prompt：executor_analysis.md（已提供）"
+
+  synthesis:
+    description: "综合整合：读取中间文档，生成自包含的最终报告"
+    notes: "专属 prompt：executor_synthesis.md + verify_synthesis.md（深度质量检查）"
+
+  creative:
+    description: "创意写作、设计、起名等"
+    notes: "暂用默认 executor_system；按需可建 executor_creative.md"
+
+  code:
+    description: "代码生成或调试"
+    notes: "暂用默认 executor_system；按需可建 executor_code.md"

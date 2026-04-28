@@ -60,7 +60,23 @@ class Verifier:
             else build_tool_usage_auditor(config)
         )
 
-    def _get_verify_prompt(self) -> str:
+    def _get_verify_prompt(self, step_type: str | None = None) -> str:
+        """两级优先级返回 verify prompt：
+
+        1. step_type 命名约定：verify_{step_type}.md（若文件存在）
+        2. 默认 verify.md（缓存）
+
+        synthesis 步骤的深度质量检查可由 quality.synthesis_quality_check.enabled
+        关闭，关闭后回退到默认 verify.md（不会强制 should_replan）。
+        """
+        # 配置闸门：synthesis 深度检查开关
+        if step_type == "synthesis" and not self.config.quality.synthesis_quality_check.enabled:
+            step_type = None
+        if step_type:
+            try:
+                return self.config.load_prompt(f"verify_{step_type}")
+            except FileNotFoundError:
+                pass  # fallback 到默认
         if self._verify_prompt is None:
             self._verify_prompt = self.config.load_prompt("verify")
         return self._verify_prompt
@@ -77,7 +93,7 @@ class Verifier:
 
         model_cfg: ModelConfig = self.config.model
 
-        prompt = self._get_verify_prompt().format(
+        prompt = self._get_verify_prompt(step.step_type).format(
             intent=step.intent,
             success_criteria=step.success_criteria,
             output=result.output[:2000],

@@ -83,12 +83,17 @@ class SimpleNode:
         config: "SundayConfig",
         tool_registry: "ToolRegistryProtocol",
         emit: "EmitCallable | None" = None,
+        executor_prompt_override: str | None = None,
     ) -> None:
         from sunday.agent.executor import Executor
         from sunday.agent.utils import noop_emit
         from sunday.agent.verifier import Verifier
 
-        self.executor = Executor(config, tool_registry=tool_registry)
+        self.executor = Executor(
+            config,
+            tool_registry=tool_registry,
+            executor_prompt_override=executor_prompt_override,
+        )
         self.verifier = Verifier(config)
         self.emit = emit or noop_emit
 

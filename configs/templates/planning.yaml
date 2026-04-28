@@ -1,0 +1,39 @@
+# Task Type: planning
+# 计划制定（直接出单一可执行计划，区别于 analysis_recommendation：不对比多方案）
+
+task_type: planning
+description: "计划制定与排期（典型：项目规划、学习路径、健身/旅行/会议日程）"
+
+trigger_hints:
+  - "计划"
+  - "排期"
+  - "安排"
+  - "日程"
+  - "学习路径"
+  - "时间表"
+
+plan_guidance: |
+  计划类任务直接给出单一可执行方案，不做多方案对比。规划时优先：目标分解 →
+  资源/约束评估 → 排期与依赖。计划要可量化、有里程碑、有应急路径。
+  关键是"可执行"——每个步骤要明确执行者、时间、产出物。
+
+steps_scaffold:
+  - role: goal_decomposition
+    step_type: analysis
+    hint: "目标 → 子目标拆解（SMART 原则）"
+  - role: resource_assessment
+    step_type: analysis
+    hint: "时间预算、资源约束、前置条件评估"
+  - role: scheduling
+    step_type: analysis
+    hint: "排期、关键路径、依赖关系"
+
+synthesis:
+  enabled: true
+  document_name_hint: "<目标主题>执行计划.md"
+  required_sections:
+    - "总体目标与背景（量化目标、约束条件）"
+    - "阶段划分（按时间或里程碑）"
+    - "详细步骤与时间表（执行者、产出物、deadline）"
+    - "关键里程碑（验收标准）"
+    - "风险与应对（可能阻塞点 + 应急方案）"

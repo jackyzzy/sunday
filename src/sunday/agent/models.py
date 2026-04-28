@@ -50,6 +50,13 @@ class Step(BaseModel):
     Verifier 据此审计是否真有联网调用。False 时：纯写作/合成步骤，无需联网。
     默认 False 兼容老 plan JSON。
     """
+    step_type: str | None = None
+    """步骤类型提示，用于选择最优 executor / verifier prompt。
+
+    通过命名约定路由：executor_{step_type}.md / verify_{step_type}.md。
+    可用 step_type 由 configs/templates/step_types.yaml 描述。
+    None 时 fallback 到默认 prompt（executor_system / verify）。
+    """
 
 
 class Plan(BaseModel):
@@ -58,6 +65,18 @@ class Plan(BaseModel):
     goal: str
     thinking: str | None = None
     steps: list[Step] = Field(default_factory=list)
+    task_type: str | None = None
+    """任务类型，由 Plan LLM 在 plan.md 输出。
+
+    可用 task_type 由 configs/templates/*.yaml 自动注册（auto-discovery）。
+    用于驱动后续策略选择（如 synthesis 步骤注入、catalog 提示）。
+    """
+    synthesis_document_name: str | None = None
+    """综合整合文档名（仅当所选 task_type 模板的 synthesis.enabled=true 时使用）。
+
+    Planner LLM 输出，应反映整体任务主题（而非单个推荐项）；LLM 漏掉时由
+    Planner 用模板的 document_name_hint 兜底。
+    """
 
 
 class ToolCall(BaseModel):

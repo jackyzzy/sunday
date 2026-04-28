@@ -1,0 +1,42 @@
+# Task Type: diagnosis
+# 问题诊断与排错（现象 → 假设 → 验证 → 根因 → 方案）
+
+task_type: diagnosis
+description: "故障排查、bug 诊断、性能问题分析（现象→根因→解决方案）"
+
+trigger_hints:
+  - "为什么"
+  - "报错"
+  - "不工作"
+  - "排查"
+  - "卡住"
+  - "性能问题"
+
+plan_guidance: |
+  诊断类任务遵循"现象→假设→验证→根因→方案"流程。规划时优先：收集症状（错误
+  日志、复现步骤、环境信息） → 提出可能原因（按概率排序） → 逐一验证 → 锁定
+  根因 → 给出短期+长期解决方案。每个假设必须可被证伪，避免"看起来像"的猜测。
+
+steps_scaffold:
+  - role: symptom_collection
+    step_type: research
+    hint: "现象、错误信息、复现步骤、环境信息收集"
+  - role: hypothesis
+    step_type: analysis
+    hint: "提出 2~5 个可能原因（按可能性排序）"
+  - role: verification
+    step_type: research
+    hint: "逐一验证假设（重现 / 查日志 / 读源码）"
+  - role: root_cause
+    step_type: analysis
+    hint: "锁定根本原因，区分直接原因与底层原因"
+
+synthesis:
+  enabled: true
+  document_name_hint: "<问题简述>诊断报告.md"
+  required_sections:
+    - "问题描述（现象、影响范围、复现步骤）"
+    - "排查过程（假设清单、验证结果）"
+    - "根本原因（直接原因 + 底层原因）"
+    - "解决方案（立即可用的临时修复 + 长期根治方案）"
+    - "预防措施（如何避免再次发生）"

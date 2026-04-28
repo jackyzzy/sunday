@@ -28,7 +28,11 @@
       "expected_output": "输出是什么",
       "success_criteria": "输出满足什么条件算成功",
       "depends_on": [],
-      "requires_realtime_data": false
+      "requires_realtime_data": false,
+      "step_type": null
     }}
   ]
 }}
+
+补充说明：
+- step_type 选填，参考父步骤的任务性质：research（搜索/调研）、analysis（分析/评估）、creative（创作）、code（编程）；不确定时留 null

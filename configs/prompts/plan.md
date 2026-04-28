@@ -49,6 +49,8 @@
 
 请以 JSON 格式输出，结构如下：
 {{
+  "task_type": "analysis_recommendation",
+  "synthesis_document_name": "2026年五一节5天4夜深圳自驾游路线分析.md",
   "goal": "任务总目标",
   "steps": [
     {{
@@ -59,9 +61,28 @@
       "success_criteria": "如何判断成功",
       "depends_on": [],
       "is_simple": false,
-      "requires_realtime_data": false
+      "requires_realtime_data": false,
+      "step_type": "research"
     }}
   ]
 }}
+
+字段说明：
+
+**task_type**（必填）：必须从系统提示中"# 可选任务类型清单"列出的枚举里选取一个；
+切勿自创类型。每个任务类型的描述与是否需要综合文档详见上方清单。
+
+**synthesis_document_name**（当任务类型清单标注"产出综合文档"时必填）：
+- 综合报告文件名，须反映**整体任务主题**（例：2026年五一节深圳自驾游路线分析.md、Python性能优化实施计划.md、Postgres连接超时诊断报告.md）
+- **不得**以具体推荐结果或单个子方案命名（错误例：赣南红都行程.md）
+- 标注"直接输出"的类型（如 creative、qa）此字段留空或省略
+- steps 中**不要**包含综合整合步骤，系统代码会自动追加
+
+**step_type**（每步可选，建议填写）：步骤类型提示，用于选择最优 executor prompt：
+- `research`：搜索、调研、数据收集（联网或读已有资料）
+- `analysis`：对比、评分、综合分析已有数据
+- `creative`：写作、创作、起名
+- `code`：代码生成、调试
+- 不确定时留空，使用默认 executor
 
 只输出 JSON，不要任何额外说明。

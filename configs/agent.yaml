@@ -73,6 +73,10 @@ quality:
     enabled: true                    # Executor 未联网兜底打标
   tool_usage_audit:
     enabled: true                    # Verifier 工具使用审计闸门
+  synthesis_quality_check:
+    enabled: true                    # synthesis 步骤的深度质量校验闸门（verify_synthesis.md）
+                                     # 关闭后回退到默认 verify.md，不强制 should_replan
+                                     # 失败重试次数复用 reasoning.max_replans_per_step
 
 # nodes:                         # 可选：为特定 step 定义专属节点配置（以 step.id 为 key）
 #   search_web:                  # 匹配 step.id == "search_web" 的步骤
@@ -83,6 +87,8 @@ quality:
 #     type: simple
 #     extra_skills:
 #       - files
+#     executor_prompt: executor_synthesis  # 静态覆盖该节点的 executor prompt
+#                                          # 优先级高于 step.step_type 的命名约定路由
 
 tasks:
   daily_brief:

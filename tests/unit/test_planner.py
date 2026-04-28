@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
@@ -10,6 +11,7 @@ import yaml
 from sunday.agent.models import THINKING_BUDGET, AgentState, StepStatus, ThinkingLevel
 from sunday.agent.planner import Planner
 from sunday.agent.utils import strip_code_fence
+from sunday.templates.loader import TemplateLoader
 
 
 def _make_settings(tmp_path, provider="anthropic"):
@@ -27,6 +29,14 @@ def _make_settings(tmp_path, provider="anthropic"):
         s = Settings()
         _ = s.sunday  # 触发 cached_property，确保在 patch.dict 上下文内读取正确配置
         return s
+
+
+def _load_builtin_templates() -> TemplateLoader:
+    """加载项目内置任务模板（用于依赖 synthesis 注入的测试）"""
+    project_root = Path(__file__).parent.parent.parent
+    loader = TemplateLoader(builtin_dir=project_root / "configs" / "templates")
+    loader.discover()
+    return loader
 
 
 def _plan_response(goal: str = "完成任务", n_steps: int = 2) -> dict:
@@ -359,3 +369,234 @@ async def test_replan_handles_think_tag_before_json(tmp_path):
 
     assert len(new) == 1
     assert new[0].id == "step_new"
+
+
+# ── task_type + synthesis 步骤注入 ─────────────────────────────────────────────
+
+async def test_plan_task_type_parsed(tmp_path):
+    """Plan JSON 含 task_type 和 synthesis_document_name 时正确解析"""
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings.sunday)
+
+    plan_data = {
+        "task_type": "analysis_recommendation",
+        "synthesis_document_name": "五一自驾游路线分析.md",
+        "goal": "完成路线分析",
+        "steps": [{
+            "id": "step_1", "intent": "收集数据",
+            "expected_input": "", "expected_output": "数据",
+            "success_criteria": "有数据", "depends_on": [],
+            "step_type": "research",
+        }],
+    }
+    mock_client = _mock_client(_anthropic_text_response(json.dumps(plan_data)))
+    state = AgentState(session_id="s1", task="规划五一旅行", thinking_level=ThinkingLevel.OFF)
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
+    ):
+        plan = await planner.think_and_plan(state)
+
+    assert plan.task_type == "analysis_recommendation"
+    assert plan.synthesis_document_name == "五一自驾游路线分析.md"
+    assert plan.steps[0].step_type == "research"
+
+
+async def test_synthesis_step_injected_for_analysis_recommendation(tmp_path):
+    """task_type=analysis_recommendation 时自动追加 step_final_synthesis"""
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings.sunday, templates=_load_builtin_templates())
+
+    plan_data = {
+        "task_type": "analysis_recommendation",
+        "synthesis_document_name": "深圳自驾游路线分析.md",
+        "goal": "路线分析",
+        "steps": [
+            {"id": "step_1", "intent": "收集数据", "expected_input": "",
+             "expected_output": "数据", "success_criteria": "有数据", "depends_on": []},
+            {"id": "step_2", "intent": "生成候选路线", "expected_input": "",
+             "expected_output": "路线", "success_criteria": "有路线", "depends_on": ["step_1"]},
+        ],
+    }
+    mock_client = _mock_client(_anthropic_text_response(json.dumps(plan_data)))
+    state = AgentState(session_id="s1", task="规划旅行", thinking_level=ThinkingLevel.OFF)
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
+    ):
+        plan = await planner.think_and_plan(state)
+
+    assert len(plan.steps) == 3
+    last = plan.steps[-1]
+    assert last.id == "step_final_synthesis"
+    assert last.step_type == "synthesis"
+    assert last.is_simple is True
+    assert last.requires_realtime_data is False
+    assert set(last.depends_on) == {"step_1", "step_2"}
+    assert "深圳自驾游路线分析.md" in last.intent
+
+
+async def test_synthesis_step_injected_for_research(tmp_path):
+    """research 类型也启用 synthesis（验证模板驱动而非硬编码）"""
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings.sunday, templates=_load_builtin_templates())
+
+    plan_data = {
+        "task_type": "research",
+        "synthesis_document_name": "AI 芯片市场调研报告.md",
+        "goal": "AI 芯片调研",
+        "steps": [
+            {"id": "step_1", "intent": "搜索信息", "expected_input": "",
+             "expected_output": "信息", "success_criteria": "有信息", "depends_on": []},
+        ],
+    }
+    mock_client = _mock_client(_anthropic_text_response(json.dumps(plan_data)))
+    state = AgentState(session_id="s1", task="调研市场", thinking_level=ThinkingLevel.OFF)
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
+    ):
+        plan = await planner.think_and_plan(state)
+
+    assert len(plan.steps) == 2
+    last = plan.steps[-1]
+    assert last.id == "step_final_synthesis"
+    assert last.step_type == "synthesis"
+    assert "AI 芯片市场调研报告.md" in last.intent
+
+
+async def test_synthesis_step_not_injected_for_creative(tmp_path):
+    """task_type=creative 时不追加 synthesis（synthesis.enabled=false）"""
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings.sunday, templates=_load_builtin_templates())
+
+    plan_data = {
+        "task_type": "creative",
+        "goal": "写一首诗",
+        "steps": [{
+            "id": "step_1", "intent": "写五言绝句", "expected_input": "",
+            "expected_output": "诗", "success_criteria": "押韵工整", "depends_on": [],
+        }],
+    }
+    mock_client = _mock_client(_anthropic_text_response(json.dumps(plan_data)))
+    state = AgentState(session_id="s1", task="写一首诗", thinking_level=ThinkingLevel.OFF)
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
+    ):
+        plan = await planner.think_and_plan(state)
+
+    assert len(plan.steps) == 1
+
+
+async def test_synthesis_step_not_injected_when_no_templates(tmp_path):
+    """未加载 templates 时不注入 synthesis（防止意外行为）"""
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings.sunday)  # 不传 templates
+
+    plan_data = {
+        "task_type": "analysis_recommendation",
+        "synthesis_document_name": "should_not_be_used.md",
+        "goal": "目标",
+        "steps": [{
+            "id": "step_1", "intent": "x", "expected_input": "",
+            "expected_output": "", "success_criteria": "", "depends_on": [],
+        }],
+    }
+    mock_client = _mock_client(_anthropic_text_response(json.dumps(plan_data)))
+    state = AgentState(session_id="s1", task="test", thinking_level=ThinkingLevel.OFF)
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
+    ):
+        plan = await planner.think_and_plan(state)
+
+    assert len(plan.steps) == 1
+
+
+async def test_synthesis_document_name_fallback(tmp_path):
+    """LLM 未给 synthesis_document_name 时，从模板 hint 或 task_type 兜底"""
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings.sunday, templates=_load_builtin_templates())
+
+    plan_data = {
+        "task_type": "diagnosis",  # 启用 synthesis 但 LLM 漏掉 doc name
+        "goal": "排查问题",
+        "steps": [{
+            "id": "step_1", "intent": "现象收集", "expected_input": "",
+            "expected_output": "现象", "success_criteria": "有现象", "depends_on": [],
+        }],
+    }
+    mock_client = _mock_client(_anthropic_text_response(json.dumps(plan_data)))
+    state = AgentState(session_id="s1", task="排查 bug", thinking_level=ThinkingLevel.OFF)
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
+    ):
+        plan = await planner.think_and_plan(state)
+
+    # synthesis 步骤被注入，文档名取 fallback
+    assert len(plan.steps) == 2
+    assert plan.steps[-1].step_type == "synthesis"
+    assert plan.synthesis_document_name  # 非空
+
+
+async def test_task_type_catalog_injected_into_prompt(tmp_path):
+    """templates 加载后，prompt 中应注入任务类型清单"""
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings.sunday, templates=_load_builtin_templates())
+
+    plan_data = _plan_response("test", n_steps=1)
+    mock_client = _mock_client(_anthropic_text_response(json.dumps(plan_data)))
+    state = AgentState(session_id="s1", task="任意任务", thinking_level=ThinkingLevel.OFF)
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
+    ):
+        await planner.think_and_plan(state)
+
+    body = mock_client.post.call_args.kwargs.get("json", {})
+    user_msg = body["messages"][0]["content"]
+    assert "可选任务类型清单" in user_msg
+    assert "analysis_recommendation" in user_msg
+    assert "creative" in user_msg
+    assert "diagnosis" in user_msg
+
+
+async def test_replan_inherits_step_type_from_failed_step(tmp_path):
+    """replan 生成的新步骤继承 failed_step.step_type"""
+    from sunday.agent.models import Plan, Step, StepResult
+
+    settings = _make_settings(tmp_path)
+    planner = Planner(settings.sunday)
+
+    # LLM 返回的新步骤未指定 step_type
+    new_steps = [
+        {"id": "step_2_new", "intent": "换个方法", "expected_input": "",
+         "expected_output": "", "success_criteria": "", "depends_on": []}
+    ]
+    replan_json = json.dumps({"steps": new_steps})
+    mock_client = _mock_client(_anthropic_text_response(replan_json))
+
+    failed_step = Step(
+        id="step_2", intent="原始步骤2", status=StepStatus.FAILED,
+        step_type="analysis",  # 失败步骤有 step_type
+    )
+    state = AgentState(session_id="s1", task="test")
+    state.plan = Plan(goal="目标", steps=[failed_step])
+
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
+        patch("sunday.agent.llm_client._get_http_client", return_value=mock_client),
+    ):
+        new = await planner.replan(failed_step, "失败原因", state)
+
+    assert len(new) == 1
+    assert new[0].step_type == "analysis"  # 自动继承
