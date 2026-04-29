@@ -49,37 +49,24 @@ class Executor:
         tool_registry: ToolRegistryProtocol | None = None,
         executor_prompt_override: str | None = None,
     ) -> None:
+        from sunday.agent.prompt_resolver import PromptResolver
+
         self.config = config
         self.tool_registry = tool_registry
         self._executor_prompt_override = executor_prompt_override
-        self._system_prompt: str | None = None
+        self._resolver = PromptResolver(config)
 
     def _get_system_prompt(self, step_type: str = "generic") -> str:
-        """按 step_type 显式 mapping 返回 system prompt：
+        """按 step_type 路由 prompt：
 
-        1. executor_prompt_override 静态覆盖（构造时注入，绕过 step_type 路由）
-        2. step_type="generic" → executor_system.md（缓存）
-        3. step_type ∈ {research, analysis, synthesis} → executor_{type}.md，
-           找不到对应文件时 raise ValueError（loud fail，不静默回退）
+        1. executor_prompt_override 静态覆盖（构造时注入，绕过 task_type 路由）
+        2. 否则 PromptResolver 按 (role="executor", task_type=step_type) 加载：
+           - generic → executor_system.md（默认）
+           - research/analysis/synthesis → executor_{type}.md（找不到 raise）
         """
-        # 1. 静态覆盖
         if self._executor_prompt_override:
             return self.config.load_prompt(self._executor_prompt_override)
-
-        # 2. generic → 默认 prompt（缓存）
-        if step_type == "generic":
-            if self._system_prompt is None:
-                self._system_prompt = self.config.load_prompt("executor_system")
-            return self._system_prompt
-
-        # 3. 显式 task-mode prompt — 找不到时 loud fail
-        try:
-            return self.config.load_prompt(f"executor_{step_type}")
-        except FileNotFoundError as e:
-            raise ValueError(
-                f"step_type={step_type!r} 要求 executor_{step_type}.md 存在，但加载失败：{e}。"
-                f"请新增该 prompt 文件，或把 step_type 改为 generic。"
-            ) from e
+        return self._resolver.resolve("executor", step_type)
 
     async def run(self, step: Step, state: AgentState) -> StepResult:
         """执行单个步骤，返回 StepResult。网络错误转为 FAILED 结果，不向上传播。"""

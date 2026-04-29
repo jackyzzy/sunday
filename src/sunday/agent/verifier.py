@@ -46,9 +46,11 @@ class Verifier:
         subject_checker: SubjectConsistencyChecker | None = None,
         tool_usage_auditor: ToolUsageAuditChecker | None = None,
     ) -> None:
+        from sunday.agent.prompt_resolver import PromptResolver
+
         self.config = config
-        self._verify_prompt: str | None = None
         self._evaluate_prompt: str | None = None
+        self._resolver = PromptResolver(config)
         # 主题一致性检查器：未显式注入时由工厂根据 config.quality 构造
         self._subject_checker: SubjectConsistencyChecker = (
             subject_checker if subject_checker is not None
@@ -61,30 +63,20 @@ class Verifier:
         )
 
     def _get_verify_prompt(self, step_type: str = "generic") -> str:
-        """按 step_type 显式 mapping 返回 verify prompt：
+        """按 step_type 路由 verify prompt（通过 PromptResolver）：
 
-        - generic → verify.md（缓存）
-        - research / analysis / synthesis → verify_{type}.md，找不到时 fallback
-          到 verify.md（与 executor 不同 —— Stage 4 才会扩展 verify_research/analysis，
-          当前阶段允许平滑回退）
+        - generic → verify.md
+        - research / analysis / synthesis → verify_{type}.md（Stage 4 已全部就位，
+          找不到 raise ValueError，与 Executor 行为一致）
 
-        synthesis 步骤的深度质量检查可由 quality.synthesis_quality_check.enabled
-        关闭，关闭后回退到默认 verify.md（不会强制 should_replan）。
+        Quality 闸门：当 step_type=synthesis 但
+        `quality.synthesis_quality_check.enabled=False` 时，调用方意图是关闭深度
+        检查 → 显式降级为 generic（走 verify.md）。这是 Verifier 特有的语义闸门，
+        不在 PromptResolver 层处理。
         """
-        # 配置闸门：synthesis 深度检查开关
         if step_type == "synthesis" and not self.config.quality.synthesis_quality_check.enabled:
             step_type = "generic"
-
-        if step_type != "generic":
-            try:
-                return self.config.load_prompt(f"verify_{step_type}")
-            except FileNotFoundError:
-                # Stage 4 才会扩展 verify_research/analysis；缺失时平滑回退到 verify.md
-                logger.debug("verify_%s.md 不存在，回退默认 verify.md", step_type)
-
-        if self._verify_prompt is None:
-            self._verify_prompt = self.config.load_prompt("verify")
-        return self._verify_prompt
+        return self._resolver.resolve("verify", step_type)
 
     def _get_evaluate_prompt(self) -> str:
         if self._evaluate_prompt is None:
