@@ -1,4 +1,4 @@
-"""`请继续` 端到端：Gateway 从本 session stream 解析原任务并改写 task。"""
+"""`请继续` 端到端：Service 从本 session stream 解析原任务并改写 task。"""
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 import websockets
 import yaml
 
-from sunday.gateway.protocol import EventType, Message
+from sunday.service.protocol import EventType, Message
 
 
 def _prepare_configs(tmp_path: Path) -> Path:
@@ -33,7 +33,10 @@ def _prepare_configs(tmp_path: Path) -> Path:
 
 def _make_settings(tmp_path: Path):
     from sunday.config import Settings
+
+    from tests.conftest import seed_workspace
     configs_dir = _prepare_configs(tmp_path)
+    seed_workspace(tmp_path / "workspace")
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
         "SUNDAY_CONFIGS_DIR": str(configs_dir),
@@ -43,10 +46,10 @@ def _make_settings(tmp_path: Path):
         return s
 
 
-async def _start_gateway(tmp_path: Path, mock_loop_run):
-    from sunday.gateway.server import Gateway
+async def _start_service(tmp_path: Path, mock_loop_run):
+    from sunday.service.server import SundayService
     settings = _make_settings(tmp_path)
-    gw = Gateway(settings)
+    gw = SundayService(settings)
     gw._mock_loop_run = mock_loop_run
     port = await gw.start_test()
     return gw, port
@@ -135,7 +138,7 @@ async def test_continuation_rewrites_task_from_session_stream(tmp_path: Path):
 
     thread_mock = AsyncMock(return_value="")
     with patch("sunday.agent.llm_client.LLMClient.call_text", new=thread_mock):
-        gw, port = await _start_gateway(tmp_path, fake_run)
+        gw, port = await _start_service(tmp_path, fake_run)
         try:
             async with websockets.connect(f"ws://localhost:{port}") as ws:
                 await ws.send(Message(
@@ -168,7 +171,7 @@ async def test_continuation_empty_session_emits_needs_input(tmp_path: Path):
     sessions_dir.mkdir(parents=True, exist_ok=True)
     sid = "emptysess01"
 
-    gw, port = await _start_gateway(tmp_path, fake_run)
+    gw, port = await _start_service(tmp_path, fake_run)
     try:
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             await ws.send(Message(
@@ -199,7 +202,7 @@ async def test_substantive_task_bypasses_continuation_rewrite(tmp_path: Path):
 
     thread_mock = AsyncMock(return_value="")
     with patch("sunday.agent.llm_client.LLMClient.call_text", new=thread_mock):
-        gw, port = await _start_gateway(tmp_path, fake_run)
+        gw, port = await _start_service(tmp_path, fake_run)
         try:
             async with websockets.connect(f"ws://localhost:{port}") as ws:
                 await ws.send(Message(

@@ -27,7 +27,7 @@ Sunday 是一个 **本地优先（local-first）** 的个人 AI 智能体。以�
 ## 特性
 
 - **本地优先** — 运行在你的个人电脑，对话历史、记忆文件不上传任何云端
-- **守护进程 + TUI** — Gateway 后台长驻，TUI 随时 attach/detach，不丢失上下文
+- **守护进程 + TUI** — Service 后台长驻，TUI 随时 attach/detach，不丢失上下文
 - **完整推理循环** — THINK → PLAN → DECOMPOSE → EXECUTE（ReAct）→ VERIFY，不可跳过
 - **持久记忆** — Markdown 文件记忆系统，SOUL / MEMORY / 每日日志分层存储，越用越懂你
 - **实时数据透明化** — Planner 自动判断哪些步骤需要联网；未联网或工具失败时报告会自动打"⚠ 未联网"标签，避免误把陈旧训练数据当事实
@@ -80,11 +80,11 @@ uv run sunday run "你好，介绍一下你自己"
 ### 4. 启动 TUI（推荐）
 
 ```bash
-# 方式一：直接启动（自动连接 Gateway）
+# 方式一：直接启动（自动连接 Service）
 uv run sunday tui
 
-# 方式二：先启动 Gateway 守护进程，再启动 TUI
-uv run sunday gateway start
+# 方式二：先启动 Service 守护进程，再启动 TUI
+uv run sunday service start
 uv run sunday tui
 ```
 
@@ -104,12 +104,12 @@ uv run sunday run "分析这段代码的性能问题" --thinking high
 uv run sunday run "翻译以下内容" --model openai/gpt-4o
 ```
 
-### Gateway 管理
+### Service 管理
 
 ```bash
-uv run sunday gateway start    # 后台启动守护进程
-uv run sunday gateway status   # 查看运行状态
-uv run sunday gateway stop     # 停止守护进程
+uv run sunday service start    # 后台启动守护进程
+uv run sunday service status   # 查看运行状态
+uv run sunday service stop     # 停止守护进程
 ```
 
 ### 记忆管理
@@ -527,7 +527,7 @@ crontab -e
   ├── TUI（Textual 终端界面）
   │     └── WebSocket ──────────────┐
   │                                 ▼
-  └── CLI（Click 命令行）     Gateway（本地守护进程）
+  └── CLI（Click 命令行）     Service（本地守护进程）
                                     │
                               Session Manager
                               （JSONL 持久化）
@@ -549,7 +549,7 @@ crontab -e
 ```
 
 **关键设计原则**：
-- `agent/` 不依赖 `gateway/`，通过注入的 `emit` 回调通信
+- `agent/` 不依赖 `service/`，通过注入的 `emit` 回调通信
 - `is_dangerous=True` 的工具执行前必须等待用户确认
 - 所有写操作通过 `.tmp` 文件原子替换，不产生半写状态
 - 记忆文件使用文件系统，无外部数据库依赖
@@ -602,7 +602,7 @@ sunday/
 │   │   └── local_loader.py    # 用户自定义工具加载器
 │   ├── skills/
 │   │   └── loader.py
-│   ├── gateway/               # WebSocket 守护进程
+│   ├── service/               # WebSocket 守护进程
 │   │   ├── server.py
 │   │   ├── session.py
 │   │   └── protocol.py

@@ -96,7 +96,7 @@ async def search_files(directory: str, pattern: str) -> str:
 
 
 def format_report_footer(result: str, report_dir: "Path | None") -> str:
-    """生成报告目录信息块，供 CLI 打印或 Gateway 拼入 DONE content。"""
+    """生成报告目录信息块，供 CLI 打印或 Service 拼入 DONE content。"""
     if not report_dir:
         return ""
     lines = [f"\n📁 报告目录：{report_dir}/"]

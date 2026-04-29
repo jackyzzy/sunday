@@ -42,7 +42,7 @@ Sunday 与 OpenClaw 最接近，核心差异：明确区分"用户静态配置�
 TUI / CLI（交互入口）
   │ WebSocket / Unix Socket
   ▼
-Gateway（本地守护进程）
+Service（本地守护进程）
   ├── Session 管理
   ├── 配置加载
   └── Agent 调度
@@ -67,7 +67,7 @@ Gateway（本地守护进程）
 
 | 组件 | 描述 |
 |------|------|
-| Gateway | 本地 WebSocket 服务，管理会话状态和 Agent 生命周期 |
+| Service | 本地 WebSocket 服务，管理会话状态和 Agent 生命周期 |
 | TUI | 基于 Textual 的终端界面，主要交互入口 |
 | Agent Loop | think→plan→decompose→execute→verify 的完整任务循环 |
 | Memory Manager | 工作区文件读写，上下文注入，记忆整合 |
@@ -90,12 +90,12 @@ Gateway（本地守护进程）
 
 #### F-02：CLI 单次调用
 - `sunday run "<任务描述>"` — 非交互式执行单个任务
-- `sunday gateway start/stop/status` — 管理后台守护进程
+- `sunday service start/stop/status` — 管理后台守护进程
 - `sunday memory show/search "<关键词>"` — 查看/搜索记忆
 - `sunday skills list/install/remove` — 技能管理
 
 #### F-03：后台守护进程
-- `sunday gateway start` 启动本地 WebSocket 服务（默认端口 7899）
+- `sunday service start` 启动本地 WebSocket 服务（默认端口 7899）
 - 守护进程崩溃后自动重启
 - TUI 和 CLI 作为轻量客户端 attach/detach，不影响运行中的 Agent
 
@@ -331,12 +331,12 @@ tasks: {}                   # 定时任务定义
 
 ### 4.1 性能
 - TUI 响应延迟 < 100ms（不含 LLM 推理时间）
-- Gateway 启动时间 < 2 秒
+- Service 启动时间 < 2 秒
 - 记忆文件读取 < 500ms（含 L0 全部文件）
 - 单会话 JSONL 文件最大 50MB，超出后自动归档
 
 ### 4.2 可靠性
-- Agent Loop 崩溃不影响 Gateway 和其他会话
+- Agent Loop 崩溃不影响 Service 和其他会话
 - 文件写入保证原子性（先写临时文件，再重命名）
 - 工具调用失败记录错误，不中断整体流程（除非步骤依赖失败）
 
@@ -400,7 +400,7 @@ tasks: {}                   # 定时任务定义
 ### Phase 2：TUI 与会话管理
 - [ ] Textual TUI（5 区布局、工具卡片、流式输出）
 - [ ] Slash 命令
-- [ ] Gateway 守护进程（WebSocket）
+- [ ] Service 守护进程（WebSocket）
 - [ ] 会话存储（JSONL）
 - [ ] 记忆整合（会话结束写入 MEMORY.md）
 

@@ -1,9 +1,8 @@
-"""Gateway Server — WebSocket 守护进程"""
+"""Sunday Service Server — WebSocket 守护进程。详见 SundayService 类 docstring。"""
 from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -13,14 +12,15 @@ from websockets.asyncio.server import serve
 
 from sunday.agent.models import AgentState, ThinkingLevel
 from sunday.bootstrap import build_memory_client
-from sunday.gateway.continuation import (
+from sunday.memory.history import event_to_dict as _event_to_dict
+from sunday.memory.history import extract_conversation
+from sunday.memory.models import SessionEvent, TurnRecord, new_turn_id
+from sunday.service.continuation import (
     build_effective_task,
     is_continuation_cue,
     resolve_continuation,
 )
-from sunday.gateway.history import extract_conversation
-from sunday.gateway.protocol import EventType, Message
-from sunday.memory.models import SessionEvent, TurnRecord
+from sunday.service.protocol import EventType, Message
 
 if TYPE_CHECKING:
     from sunday.config import Settings
@@ -37,8 +37,8 @@ _STREAM_RECORDABLE = {
 }
 
 
-class Gateway:
-    """本地 WebSocket 守护进程。
+class SundayService:
+    """本地 WebSocket 守护进程，Sunday 的唯一执行后端。
 
     职责：
     - 接受 WebSocket 连接（session_id 映射）
@@ -46,11 +46,26 @@ class Gateway:
     - 管理 AgentLoop asyncio.Task 生命周期
     - 提供 emit() 回调供 AgentLoop 使用
     - 所有持久化都通过 self._client (MemoryClient)
+
+    并发模型（约定，未在代码层面强制）：
+    - **单 session 单 attach**：`_connections[session_id]` 只保留最新连接的 WS；
+      新连接到来会覆盖旧连接，旧 WS 不再收到推送（但若它发 SEND，仍能进入路由
+      并跑任务，因任务级 lock 串行）。生产场景不应同时让两个客户端 attach 同一 session。
+    - **任务串行**：同一 session 的 SEND 必须等上一个 task 完成（_handle_send 会
+      检测 _running_tasks 并回 STATUS busy）。
+    - 后续如需多客户端订阅广播，把 `_connections` 改为
+      `_subscribers: dict[str, set[WebSocket]]` 并在 emit() 中 fan-out 即可，
+      其他逻辑无需变化。
     """
 
     def __init__(self, settings: "Settings") -> None:
+        from sunday.bootstrap import assert_runtime_initialized
+
+        # 冷启动检查：未 init 则报错，提示 sunday init
+        assert_runtime_initialized(settings.sunday)
+
         self._settings = settings
-        self._client: MemoryClient = build_memory_client(settings.sunday)
+        self._client: MemoryClient = build_memory_client(settings.sunday, mode="service")
 
         # session_id → WebSocket
         self._connections: dict[str, Any] = {}
@@ -68,14 +83,14 @@ class Gateway:
     # ── 启动 / 停止 ───────────────────────────────────────────────────────
 
     async def start(self, port: int = DEFAULT_PORT) -> None:
-        logger.info("Gateway 启动，监听 ws://localhost:%d", port)
+        logger.info("Service 启动，监听 ws://localhost:%d", port)
         async with serve(self._handle, "localhost", port, ping_interval=None):
             await asyncio.Future()
 
     async def start_test(self, port: int = 0) -> int:
         self._server = await serve(self._handle, "localhost", port, ping_interval=None)
         actual_port = self._server.sockets[0].getsockname()[1]
-        logger.debug("Gateway 测试模式，端口=%d", actual_port)
+        logger.debug("Service 测试模式，端口=%d", actual_port)
         return actual_port
 
     async def stop(self) -> None:
@@ -146,11 +161,14 @@ class Gateway:
                 })
                 return
 
-        turn_id = uuid.uuid4().hex[:8]
+        # turn_index 从 session meta 取（write_turn 会自增），new turn 的 index = current_count + 1
+        session_meta = await self._client.sessions.get(session_id)
+        turn_index = (session_meta.turn_count if session_meta else 0) + 1
+        turn_id = new_turn_id(turn_index)
         turn_start_ts = datetime.now(timezone.utc).isoformat()
         turn_buffer: dict = {
             "turn_id": turn_id,
-            "turn_index": 0,
+            "turn_index": turn_index,
             "ts_start": turn_start_ts,
             "ts_end": "",
             "outcome": "",
@@ -429,7 +447,7 @@ class Gateway:
                     last_step.setdefault("tool_calls", []).append(data)
 
         return build_agent_loop(
-            cfg, loop_emit, mode="gateway", confirmation_handler=gw_confirm,
+            cfg, loop_emit, mode="service", confirmation_handler=gw_confirm,
             memory_client=self._client,
         )
 
@@ -463,12 +481,3 @@ def _ellipsize(text: str, limit: int) -> str:
     return text[:limit] + "……"
 
 
-def _event_to_dict(event: SessionEvent) -> dict:
-    """SessionEvent → continuation/extract_conversation 兼容的字典。"""
-    return {
-        "type": event.type,
-        "session_id": event.session_id,
-        "turn_id": event.turn_id,
-        "data": event.data,
-        "ts": event.ts,
-    }

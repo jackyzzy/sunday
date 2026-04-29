@@ -1,10 +1,23 @@
-"""会话历史提取：把 stream.jsonl 事件流还原为 Planner 可用的 Message 列表。
+"""会话历史适配：SessionEvent / dict 流 → Planner 可用的 Message 列表。
 
-CLI 与 Gateway 共享本模块，避免重复实现。
+属于 memory 域：把存储层的事件流还原为 agent 上下文。Service / CLI / 未来 Web
+等所有调用方共用同一份实现。
 """
 from __future__ import annotations
 
 from sunday.agent.models import Message as ConvMessage
+from sunday.memory.models import SessionEvent
+
+
+def event_to_dict(event: SessionEvent) -> dict:
+    """SessionEvent → continuation/extract_conversation 兼容的字典。"""
+    return {
+        "type": event.type,
+        "session_id": event.session_id,
+        "turn_id": event.turn_id,
+        "data": event.data,
+        "ts": event.ts,
+    }
 
 
 def extract_conversation(events: list[dict], max_turns: int = 5) -> list[ConvMessage]:

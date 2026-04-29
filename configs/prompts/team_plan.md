@@ -29,10 +29,12 @@
       "success_criteria": "输出满足什么条件算成功",
       "depends_on": [],
       "requires_realtime_data": false,
-      "step_type": null
+      "step_type": "generic"
     }}
   ]
 }}
 
 补充说明：
-- step_type 选填，参考父步骤的任务性质：research（搜索/调研）、analysis（分析/评估）、creative（创作）、code（编程）；不确定时留 null
+- step_type **必填**，enum：`research`（搜索/调研）、`analysis`（分析/评估）、`synthesis`（综合整合）、`generic`（默认，无特殊模式）
+- 参考父步骤的任务性质选择；不确定时用 `generic`
+- 不允许其他值，`generic` 是合法默认值（不是 fallback）

@@ -1,7 +1,7 @@
 """Session 内连续词识别与任务续写解析。
 
 用途：当用户输入 "请继续"、"继续"、"continue" 等纯粹的连续词时，
-Gateway 在进入 AgentLoop 前先扫描本 session 的 stream.jsonl，
+Service 在进入 AgentLoop 前先扫描本 session 的 stream.jsonl，
 找出最早的实质性 user send 作为"原始任务"，并把最近的失败原因一并带上，
 改写成带上下文的 effective_task 再交给 Planner，避免 Planner 在缺乏本会话
 锚点的情况下误将 L1/L2 里最热的话题当成当前任务的延展。

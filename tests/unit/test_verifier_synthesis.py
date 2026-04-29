@@ -3,6 +3,7 @@ import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import yaml
 
 from sunday.agent.models import AgentState, Step, StepResult, StepStatus
@@ -72,45 +73,28 @@ async def test_verifier_uses_synthesis_prompt_for_synthesis_step(tmp_path):
     assert "对比表" in vr.reason
 
 
-async def test_verifier_falls_back_to_default_for_unknown_step_type(tmp_path):
-    """未知 step_type 时 fallback 到 verify.md"""
-    settings = _make_settings(tmp_path)
-    verifier = Verifier(settings.sunday)
+async def test_verifier_rejects_unknown_step_type():
+    """unknown step_type 不符合 Literal enum，Pydantic 直接拒绝构造 Step。"""
+    from pydantic import ValidationError
 
-    # 关闭额外闸门
-    settings.sunday.quality.subject_consistency.enabled = False
-    settings.sunday.quality.tool_usage_audit.enabled = False
-
-    step = Step(
-        id="step_1",
-        step_type="unknown_xyz",
-        intent="某步骤",
-        success_criteria="完成",
-    )
-    result = StepResult(step_id=step.id, status=StepStatus.DONE, output="OK")
-    state = AgentState(session_id="s1", task="test")
-
-    response = json.dumps({"passed": True, "reason": "ok", "should_replan": False})
-    mc = _mock_response(response)
-
-    with (
-        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-fake"}),
-        patch("sunday.agent.llm_client._get_http_client", return_value=mc),
-    ):
-        vr = await verifier.check(step, result, state)
-
-    assert vr.passed is True
+    with pytest.raises(ValidationError):
+        Step(
+            id="step_1",
+            step_type="unknown_xyz",  # 非 enum 值，Pydantic 拒绝
+            intent="某步骤",
+            success_criteria="完成",
+        )
 
 
-async def test_verifier_uses_default_when_step_type_is_none(tmp_path):
-    """step_type=None 时使用默认 verify.md"""
+async def test_verifier_uses_default_when_step_type_is_generic(tmp_path):
+    """step_type='generic'（默认）时使用 verify.md"""
     settings = _make_settings(tmp_path)
     verifier = Verifier(settings.sunday)
 
     settings.sunday.quality.subject_consistency.enabled = False
     settings.sunday.quality.tool_usage_audit.enabled = False
 
-    step = Step(id="step_1", intent="某步骤", success_criteria="完成")  # step_type=None
+    step = Step(id="step_1", intent="某步骤", success_criteria="完成")  # step_type 默认 generic
     result = StepResult(step_id=step.id, status=StepStatus.DONE, output="OK")
     state = AgentState(session_id="s1", task="test")
 

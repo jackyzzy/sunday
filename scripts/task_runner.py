@@ -63,7 +63,7 @@ class TaskRunner:
             return await agent_loop.run(state) or ""
 
         from sunday.bootstrap import build_agent_loop, build_memory_client
-        from sunday.gateway.protocol import EventType
+        from sunday.service.protocol import EventType
 
         cfg = self._settings.sunday
 

@@ -44,33 +44,33 @@ def test_tui_starts_app(runner):
     mock_app.run.assert_called_once()
 
 
-def test_gateway_start_already_running(runner, tmp_path):
-    """gateway start：已运行时输出提示"""
-    pid_file = tmp_path / "gateway.pid"
+def test_service_start_already_running(runner, tmp_path):
+    """service start：已运行时输出提示"""
+    pid_file = tmp_path / "service.pid"
     pid_file.write_text("99999")
     with (
-        patch("sunday.cli._gateway_pid_file", return_value=pid_file),
+        patch("sunday.cli._service_pid_file", return_value=pid_file),
         patch("os.kill", return_value=None),
     ):
-        result = runner.invoke(main, ["gateway", "start"])
+        result = runner.invoke(main, ["service", "start"])
     assert result.exit_code == 0
     assert "已在运行" in result.output or "PID" in result.output
 
 
-def test_gateway_stop_not_running(runner, tmp_path):
-    """gateway stop：未运行时输出提示"""
-    pid_file = tmp_path / "gateway.pid"  # 不存在
-    with patch("sunday.cli._gateway_pid_file", return_value=pid_file):
-        result = runner.invoke(main, ["gateway", "stop"])
+def test_service_stop_not_running(runner, tmp_path):
+    """service stop：未运行时输出提示"""
+    pid_file = tmp_path / "service.pid"  # 不存在
+    with patch("sunday.cli._service_pid_file", return_value=pid_file):
+        result = runner.invoke(main, ["service", "stop"])
     assert result.exit_code == 0
     assert "未运行" in result.output or "不存在" in result.output
 
 
-def test_gateway_status_not_running(runner, tmp_path):
-    """gateway status：未运行时输出提示"""
-    pid_file = tmp_path / "gateway.pid"  # 不存在
-    with patch("sunday.cli._gateway_pid_file", return_value=pid_file):
-        result = runner.invoke(main, ["gateway", "status"])
+def test_service_status_not_running(runner, tmp_path):
+    """service status：未运行时输出提示"""
+    pid_file = tmp_path / "service.pid"  # 不存在
+    with patch("sunday.cli._service_pid_file", return_value=pid_file):
+        result = runner.invoke(main, ["service", "status"])
     assert result.exit_code == 0
     assert "未运行" in result.output
 
@@ -85,48 +85,44 @@ def test_skills_list_no_skills(runner, tmp_path):
 
 # ── sunday run：无 API key 时退出码 1 ──────────────────────────────────────────
 
-def test_run_no_api_key_exits_1(runner, tmp_path):
-    """无 API key 时 run 退出码 1，stderr 或 output 含提示"""
+def test_run_service_unreachable_exits_1(runner, tmp_path):
+    """Service 不可达时 run 退出码 1，提示 sunday doctor。
+
+    （S1-B 后 CLI 不再 in-process 跑 agent，无 API key 检测移到 service 端。）
+    """
     import yaml
     config_file = tmp_path / "agent.yaml"
     config_file.write_text(yaml.dump({"agent": {"name": "T"}}))
 
-    with patch.dict(os.environ, {
-        "ANTHROPIC_API_KEY": "",
-        "OPENAI_API_KEY": "",
-        "GOOGLE_API_KEY": "",
-        "DEEPSEEK_API_KEY": "",
-        "SUNDAY_CONFIGS_DIR": str(tmp_path),
-    }, clear=False):
+    with (
+        patch.dict(os.environ, {
+            "ANTHROPIC_API_KEY": "",
+            "SUNDAY_CONFIGS_DIR": str(tmp_path),
+        }, clear=False),
+        # mock service 启动失败
+        patch("sunday.service.client.is_service_running", return_value=False),
+        patch("sunday.service.client.spawn_service_if_needed", return_value=False),
+    ):
         result = runner.invoke(main, ["run", "hello"])
     assert result.exit_code == 1
-    stderr = result.stderr if hasattr(result, "stderr") and result.stderr else ""
-    combined = result.output + stderr
-    assert "API key" in combined or "api" in combined.lower() or "配置" in combined
+    combined = result.output + (result.stderr if getattr(result, "stderr", None) else "")
+    assert "Service" in combined or "doctor" in combined
 
 
 # ── sunday run：--thinking 合法值 ─────────────────────────────────────────────
 
 @pytest.mark.parametrize("level", ["off", "minimal", "low", "medium", "high"])
 def test_run_thinking_valid_values(runner, level):
-    """--thinking 5 个合法值均被接受（mock agent.run）"""
-    import yaml
-    with runner.isolated_filesystem():
-        config_file = Path("agent.yaml")
-        config_file.write_text(yaml.dump({"agent": {"name": "T"}}))
-
-        mock_run = AsyncMock(return_value="mock response")
-        with (
-            patch.dict(os.environ, {
-                "ANTHROPIC_API_KEY": "fake-key",
-                "SUNDAY_CONFIGS_DIR": ".",  # isolated_filesystem() 已切换 cwd，agent.yaml 就在当前目录
-            }),
-            patch("sunday.agent.simple.SimpleAgent.run", mock_run),
-        ):
-            result = runner.invoke(main, ["run", "test task", "--thinking", level])
-        # 只要不因"非法值"而报错就算通过
-        assert "Invalid value" not in result.output
-        assert result.exit_code in (0, 1)  # 1 是可能的业务错误，但非参数错误
+    """--thinking 5 个合法值均被 click 接受（不因非法参数被拒）。"""
+    # 提前让 service 路径短路（service 不可达）；本测试只验证参数解析
+    with (
+        patch("sunday.service.client.is_service_running", return_value=False),
+        patch("sunday.service.client.spawn_service_if_needed", return_value=False),
+    ):
+        result = runner.invoke(main, ["run", "test task", "--thinking", level])
+    assert "Invalid value" not in result.output
+    # 退出码不为 2（click 参数错误的码）；其他业务码（含 1）允许
+    assert result.exit_code != 2
 
 
 def test_run_thinking_invalid_value(runner):
@@ -136,30 +132,37 @@ def test_run_thinking_invalid_value(runner):
     assert "Invalid value" in result.output or "Error" in result.output
 
 
-# ── sunday run：--model override ──────────────────────────────────────────────
+# ── sunday run：--model 参数透传给 service ─────────────────────────────────────
 
-def test_run_model_override(runner, tmp_path):
-    """--model 参数被正确传递给 SimpleAgent"""
-    import yaml
-    config_file = tmp_path / "agent.yaml"
-    config_file.write_text(yaml.dump({"agent": {"name": "T"}}))
-
+def test_run_model_override_passed_to_service(runner, tmp_path):
+    """--model 参数被透传到 ServiceClient.submit_task。"""
     captured = {}
 
-    async def fake_run(self, task):
-        captured["model_override"] = self.model_override
-        return "ok"
+    async def fake_submit(self, session_id, task, thinking_level="medium",
+                          model_override=None, auto_confirm=False):
+        captured["model_override"] = model_override
+        captured["task"] = task
+        # 模拟 service 立即推 DONE
+        from sunday.service.protocol import EventType, Message
+        yield Message(type=EventType.DONE, session_id=session_id, data={"content": "ok"})
+
+    async def fake_aenter(self):
+        return self
+
+    async def fake_aexit(self, *_exc):
+        return None
 
     with (
-        patch.dict(os.environ, {
-            "ANTHROPIC_API_KEY": "fake-key",
-            "SUNDAY_CONFIGS_DIR": str(tmp_path),
-        }),
-        patch("sunday.agent.simple.SimpleAgent.run", fake_run),
+        patch("sunday.service.client.is_service_running", return_value=True),
+        patch("sunday.service.client.ServiceClient.__aenter__", fake_aenter),
+        patch("sunday.service.client.ServiceClient.__aexit__", fake_aexit),
+        patch("sunday.service.client.ServiceClient.submit_task", fake_submit),
     ):
-        runner.invoke(main, ["run", "test", "--model", "openai/gpt-4o"])
+        result = runner.invoke(main, ["run", "test", "--model", "openai/gpt-4o"])
 
     assert captured.get("model_override") == "openai/gpt-4o"
+    assert captured.get("task") == "test"
+    assert result.exit_code == 0
 
 
 # ── memory show / search ──────────────────────────────────────────────────────

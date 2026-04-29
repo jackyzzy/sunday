@@ -21,7 +21,7 @@ from sunday.agent.llm_client import LLMClient
 from sunday.agent.models import THINKING_BUDGET, AgentState, Plan, Step
 from sunday.agent.realtime_hints import classify, format_for_plan_prompt
 from sunday.agent.utils import EmitCallable, noop_emit, strip_code_fence
-from sunday.gateway.protocol import EventType
+from sunday.service.protocol import EventType
 
 if TYPE_CHECKING:
     from sunday.config import ModelConfig, SundayConfig
@@ -342,9 +342,10 @@ class Planner:
             logger.warning("replan 响应 JSON 解析失败（%s），返回空步骤列表。原文：%s", e, plan_text[:200])
             return []
         new_steps = [Step(**s) for s in data.get("steps", [])]
-        # 继承失败步骤的 step_type，避免重新生成时丢失类型信息
+        # 继承失败步骤的 step_type：若 replan LLM 未显式声明（落入默认 "generic"）
+        # 但原失败步骤是专项类型，保留专项 prompt 路由；否则尊重 LLM 输出
         for s in new_steps:
-            if s.step_type is None:
+            if s.step_type == "generic" and failed_step.step_type != "generic":
                 s.step_type = failed_step.step_type
         return new_steps
 
@@ -398,9 +399,9 @@ class Planner:
             logger.warning("sub_replan 响应解析失败（%s），原文：%s", e, plan_text[:200])
             return []
         new_steps = [Step(**s) for s in data.get("steps", [])]
-        # 继承失败子步骤的 step_type
+        # 继承失败子步骤的 step_type（同 replan 的语义）
         for s in new_steps:
-            if s.step_type is None:
+            if s.step_type == "generic" and failed_sub_step.step_type != "generic":
                 s.step_type = failed_sub_step.step_type
         return new_steps
 

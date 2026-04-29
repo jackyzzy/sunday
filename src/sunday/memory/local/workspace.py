@@ -1,13 +1,17 @@
-"""LocalWorkspaceClient — 只读 L0 用户配置。
+"""LocalWorkspaceClient — L0 用户配置（读 + 模板 seed）。
 
 读取 SOUL/AGENTS/TOOLS/RUNTIME_RULES 四个 markdown 文件 + workspace/skills/ 列表。
 RUNTIME_RULES.md 解析逻辑（关键词清单、阈值）也吸收进来，对外暴露
 RuntimeRules 数据对象。
+
+ensure_seeded(template_dir) 是首次部署的 seed 入口（由 sunday init 调用）：
+从项目模板复制缺失的 L0 文件，并创建 workspace/{templates,skills}/ 用户扩展点。
 """
 from __future__ import annotations
 
 import logging
 import re
+import shutil
 from pathlib import Path
 
 from sunday.memory.models import RuntimeRules
@@ -56,6 +60,25 @@ class LocalWorkspaceClient:
         if self._skills_dir is None or not self._skills_dir.exists():
             return []
         return sorted(p.name for p in self._skills_dir.iterdir() if p.is_dir())
+
+    async def ensure_seeded(self, template_dir: Path) -> list[str]:
+        """从项目模板首次复制 L0 文件 + 创建用户扩展点目录。幂等。"""
+        seeded: list[str] = []
+        self._dir.mkdir(parents=True, exist_ok=True)
+
+        if template_dir.is_dir():
+            for fname in _FILE_NAMES.values():
+                dest = self._dir / fname
+                src = template_dir / fname
+                if not dest.exists() and src.exists():
+                    shutil.copy2(src, dest)
+                    logger.info("seed L0 文件：%s", dest)
+                    seeded.append(fname)
+
+        # 用户扩展点（即使空也存在，提示用户可在此扩展）
+        (self._dir / "templates").mkdir(parents=True, exist_ok=True)
+        (self._dir / "skills").mkdir(parents=True, exist_ok=True)
+        return seeded
 
 
 # ── RuntimeRules 解析器（从原 runtime_rules.py 整体迁入）───────────────────

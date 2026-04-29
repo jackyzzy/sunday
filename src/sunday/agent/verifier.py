@@ -60,23 +60,28 @@ class Verifier:
             else build_tool_usage_auditor(config)
         )
 
-    def _get_verify_prompt(self, step_type: str | None = None) -> str:
-        """两级优先级返回 verify prompt：
+    def _get_verify_prompt(self, step_type: str = "generic") -> str:
+        """按 step_type 显式 mapping 返回 verify prompt：
 
-        1. step_type 命名约定：verify_{step_type}.md（若文件存在）
-        2. 默认 verify.md（缓存）
+        - generic → verify.md（缓存）
+        - research / analysis / synthesis → verify_{type}.md，找不到时 fallback
+          到 verify.md（与 executor 不同 —— Stage 4 才会扩展 verify_research/analysis，
+          当前阶段允许平滑回退）
 
         synthesis 步骤的深度质量检查可由 quality.synthesis_quality_check.enabled
         关闭，关闭后回退到默认 verify.md（不会强制 should_replan）。
         """
         # 配置闸门：synthesis 深度检查开关
         if step_type == "synthesis" and not self.config.quality.synthesis_quality_check.enabled:
-            step_type = None
-        if step_type:
+            step_type = "generic"
+
+        if step_type != "generic":
             try:
                 return self.config.load_prompt(f"verify_{step_type}")
             except FileNotFoundError:
-                pass  # fallback 到默认
+                # Stage 4 才会扩展 verify_research/analysis；缺失时平滑回退到 verify.md
+                logger.debug("verify_%s.md 不存在，回退默认 verify.md", step_type)
+
         if self._verify_prompt is None:
             self._verify_prompt = self.config.load_prompt("verify")
         return self._verify_prompt
@@ -106,8 +111,13 @@ class Verifier:
             logger.warning("check LLM 调用失败（%s），默认通过", e)
             return VerifyResult(passed=True, reason=f"验证调用失败，默认通过：{e}")
 
-        # 仅在基础验证通过且输出有实质内容时，额外做主题一致性检查，兜底"上下文串话"
-        if vr.passed and len(result.output) >= _SUBJECT_CHECK_MIN_OUTPUT_CHARS:
+        # 三层闸门短路（S3-A）：第一道 fail 直接 return，不再调后续 LLM。
+        # 1) 基础 verify fail → 跳过 subject_consistency + tool_usage_audit
+        if not vr.passed:
+            return vr
+
+        # 2) 主题一致性（仅在输出有实质内容时启用，兜底"上下文串话"）
+        if len(result.output) >= _SUBJECT_CHECK_MIN_OUTPUT_CHARS:
             subjects = self._extract_subjects(state)
             if subjects:
                 sc = await self._subject_checker.check(result.output, subjects)
@@ -116,26 +126,26 @@ class Verifier:
                         "步骤 %s 主题不一致：%s（主题：%s）",
                         step.id, sc.reason, subjects,
                     )
+                    # 短路：主题失败 → 不再做工具使用审计
                     return VerifyResult(
                         passed=False,
                         reason=f"主题不一致：{sc.reason}",
                         should_replan=True,
                     )
 
-        # 第三道闸门：工具使用审计 — realtime 步骤必须真的联网或带未联网标签
-        if vr.passed:
-            audit = await self._tool_usage_auditor.check(
-                step, result.react_iterations, result.output,
+        # 3) 工具使用审计 — realtime 步骤必须真的联网或带未联网标签
+        audit = await self._tool_usage_auditor.check(
+            step, result.react_iterations, result.output,
+        )
+        if not audit.passed:
+            logger.warning(
+                "步骤 %s 工具使用审计失败：%s", step.id, audit.reason,
             )
-            if not audit.passed:
-                logger.warning(
-                    "步骤 %s 工具使用审计失败：%s", step.id, audit.reason,
-                )
-                return VerifyResult(
-                    passed=False,
-                    reason=f"工具使用审计失败：{audit.reason}",
-                    should_replan=True,
-                )
+            return VerifyResult(
+                passed=False,
+                reason=f"工具使用审计失败：{audit.reason}",
+                should_replan=True,
+            )
         return vr
 
     @staticmethod

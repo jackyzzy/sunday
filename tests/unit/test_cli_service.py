@@ -1,4 +1,4 @@
-"""T5-4 验证：CLI Gateway 命令（CliRunner，mock subprocess/os.kill）"""
+"""T5-4 验证：CLI Service 命令（CliRunner，mock subprocess/os.kill）"""
 from __future__ import annotations
 
 import os
@@ -26,65 +26,65 @@ def _make_env(tmp_path) -> dict:
     }
 
 
-def test_gateway_start_writes_pid_file(tmp_path):
-    """gateway start 后 PID 文件存在（mock subprocess）"""
+def test_service_start_writes_pid_file(tmp_path):
+    """service start 后 PID 文件存在（mock subprocess）"""
     env = _make_env(tmp_path)
-    pid_file = tmp_path / "gateway.pid"
+    pid_file = tmp_path / "service.pid"
 
     fake_proc = MagicMock()
     fake_proc.pid = 12345
 
     with patch.dict(os.environ, env):
         with patch("sunday.cli.subprocess.Popen", return_value=fake_proc):
-            with patch("sunday.cli._gateway_pid_file", return_value=pid_file):
+            with patch("sunday.cli._service_pid_file", return_value=pid_file):
                 runner = CliRunner()
-                result = runner.invoke(main, ["gateway", "start"])
+                result = runner.invoke(main, ["service", "start"])
     assert result.exit_code == 0
     assert pid_file.exists()
     assert pid_file.read_text().strip() == "12345"
 
 
-def test_gateway_stop_sends_sigterm(tmp_path):
-    """gateway stop 读 PID 文件并发送 SIGTERM（mock os.kill）"""
+def test_service_stop_sends_sigterm(tmp_path):
+    """service stop 读 PID 文件并发送 SIGTERM（mock os.kill）"""
     env = _make_env(tmp_path)
-    pid_file = tmp_path / "gateway.pid"
+    pid_file = tmp_path / "service.pid"
     pid_file.write_text("99999")
 
     with patch.dict(os.environ, env):
-        with patch("sunday.cli._gateway_pid_file", return_value=pid_file):
+        with patch("sunday.cli._service_pid_file", return_value=pid_file):
             with patch("sunday.cli.os.kill") as mock_kill:
                 runner = CliRunner()
-                result = runner.invoke(main, ["gateway", "stop"])
+                result = runner.invoke(main, ["service", "stop"])
 
     mock_kill.assert_called_once_with(99999, signal.SIGTERM)
     assert result.exit_code == 0
 
 
-def test_gateway_status_running(tmp_path):
+def test_service_status_running(tmp_path):
     """status 检测到进程运行时打印运行中"""
     env = _make_env(tmp_path)
-    pid_file = tmp_path / "gateway.pid"
+    pid_file = tmp_path / "service.pid"
     pid_file.write_text("99999")
 
     with patch.dict(os.environ, env):
-        with patch("sunday.cli._gateway_pid_file", return_value=pid_file):
+        with patch("sunday.cli._service_pid_file", return_value=pid_file):
             with patch("sunday.cli.os.kill", return_value=None):  # 进程存在
                 runner = CliRunner()
-                result = runner.invoke(main, ["gateway", "status"])
+                result = runner.invoke(main, ["service", "status"])
 
     assert "运行" in result.output or "running" in result.output.lower()
 
 
-def test_gateway_status_not_running(tmp_path):
+def test_service_status_not_running(tmp_path):
     """status 检测到进程不存在时打印未运行"""
     env = _make_env(tmp_path)
-    pid_file = tmp_path / "gateway.pid"
+    pid_file = tmp_path / "service.pid"
     # pid 文件不存在
 
     with patch.dict(os.environ, env):
-        with patch("sunday.cli._gateway_pid_file", return_value=pid_file):
+        with patch("sunday.cli._service_pid_file", return_value=pid_file):
             runner = CliRunner()
-            result = runner.invoke(main, ["gateway", "status"])
+            result = runner.invoke(main, ["service", "status"])
 
     assert (
         "未运行" in result.output

@@ -1,4 +1,4 @@
-"""T5-3 验证：Gateway Server 集成测试（真实 WebSocket，mock AgentLoop）"""
+"""T5-3 验证：Service Server 集成测试（真实 WebSocket，mock AgentLoop）"""
 from __future__ import annotations
 
 import asyncio
@@ -9,11 +9,13 @@ from unittest.mock import patch
 import websockets
 import yaml
 
-from sunday.gateway.protocol import EventType, Message
+from sunday.service.protocol import EventType, Message
 
 
 def _make_settings(tmp_path):
     from sunday.config import Settings
+
+    from tests.conftest import seed_workspace
     config_file = tmp_path / "agent.yaml"
     config_file.write_text(yaml.dump({
         "model": {"provider": "anthropic", "id": "claude-test", "max_tokens": 4096},
@@ -22,6 +24,7 @@ def _make_settings(tmp_path):
             "sessions_dir": str(tmp_path / "sessions"),
         },
     }))
+    seed_workspace(tmp_path / "workspace")
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
         "SUNDAY_CONFIGS_DIR": str(tmp_path),
@@ -29,11 +32,11 @@ def _make_settings(tmp_path):
         return Settings()
 
 
-async def _start_gateway(tmp_path, mock_loop_run=None):
-    """启动 Gateway，返回 (gateway, port)。mock_loop_run 替换 AgentLoop.run。"""
-    from sunday.gateway.server import Gateway
+async def _start_service(tmp_path, mock_loop_run=None):
+    """启动 Service，返回 (service, port)。mock_loop_run 替换 AgentLoop.run。"""
+    from sunday.service.server import SundayService
     settings = _make_settings(tmp_path)
-    gw = Gateway(settings)
+    gw = SundayService(settings)
 
     if mock_loop_run is not None:
         gw._mock_loop_run = mock_loop_run
@@ -53,9 +56,9 @@ async def _recv(ws, timeout=2.0) -> dict:
 
 # ── 连接 ──────────────────────────────────────────────────────────────────────
 
-async def test_gateway_starts_and_accepts_connection(tmp_path):
-    """Gateway 启动后可建立 WebSocket 连接"""
-    gw, port = await _start_gateway(tmp_path)
+async def test_service_starts_and_accepts_connection(tmp_path):
+    """Service 启动后可建立 WebSocket 连接"""
+    gw, port = await _start_service(tmp_path)
     try:
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             # websockets 16+ 用 ws.state 检查，简单 ping 验证连通即可
@@ -75,7 +78,7 @@ async def test_send_message_triggers_agent_loop(tmp_path):
         loop_called.set()
         return "完成"
 
-    gw, port = await _start_gateway(tmp_path, mock_loop_run=fake_run)
+    gw, port = await _start_service(tmp_path, mock_loop_run=fake_run)
     try:
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             sid = "testsession1"
@@ -103,7 +106,7 @@ async def test_abort_cancels_task(tmp_path):
             raise
         return "done"
 
-    gw, port = await _start_gateway(tmp_path, mock_loop_run=slow_run)
+    gw, port = await _start_service(tmp_path, mock_loop_run=slow_run)
     try:
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             sid = "abortsess01"
@@ -127,7 +130,7 @@ async def test_serial_same_session(tmp_path):
         await blocking.wait()
         return "done"
 
-    gw, port = await _start_gateway(tmp_path, mock_loop_run=blocking_run)
+    gw, port = await _start_service(tmp_path, mock_loop_run=blocking_run)
     try:
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             sid = "serialsess1"
@@ -152,10 +155,10 @@ async def test_emit_pushes_to_client(tmp_path):
 
     async def capture_emit_run(state):
         nonlocal emit_fn
-        # 通过 state 拿到 emit，实际通过 gateway 注入
+        # 通过 state 拿到 emit，实际通过 service 注入
         return "done"
 
-    gw, port = await _start_gateway(tmp_path)
+    gw, port = await _start_service(tmp_path)
     try:
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             sid = "emitsess001"
@@ -195,7 +198,7 @@ async def test_confirm_resolves_future(tmp_path):
         confirmed_value = result
         return "done"
 
-    gw, port = await _start_gateway(tmp_path, mock_loop_run=confirm_run)
+    gw, port = await _start_service(tmp_path, mock_loop_run=confirm_run)
     try:
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             sid = "confirmsess1"
@@ -219,7 +222,7 @@ async def test_confirm_resolves_future(tmp_path):
 
 async def test_slash_new_creates_session(tmp_path):
     """/new slash 命令返回新 session_id"""
-    gw, port = await _start_gateway(tmp_path)
+    gw, port = await _start_service(tmp_path)
     try:
         async with websockets.connect(f"ws://localhost:{port}") as ws:
             sid = "slashsess001"

@@ -1,7 +1,7 @@
 """测试 extract_conversation：会话失败后历史上下文重建"""
 from __future__ import annotations
 
-from sunday.gateway.history import extract_conversation as _extract_conversation
+from sunday.memory.history import extract_conversation as _extract_conversation
 
 
 def _ev(type_: str, data: dict, turn_id: str = "t1") -> dict:

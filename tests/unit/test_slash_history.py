@@ -1,7 +1,7 @@
-"""/history 命令：Gateway compact payload + TUI 渲染。"""
+"""/history 命令：Service compact payload + TUI 渲染。"""
 from __future__ import annotations
 
-from sunday.gateway.server import _compact_turn_for_display, _ellipsize
+from sunday.service.server import _compact_turn_for_display, _ellipsize
 from sunday.memory.models import TurnRecord
 from sunday.tui.app import _format_history_payload
 

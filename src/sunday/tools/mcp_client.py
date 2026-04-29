@@ -1,7 +1,7 @@
 """Phase 4：MCPClientManager — MCP 客户端管理（轻量占位实现）
 
 当前阶段不引入真实 MCP 子进程，提供接口占位。
-Phase 5 Gateway 实装时替换为完整实现。
+Phase 5 Service 实装时替换为完整实现。
 """
 from __future__ import annotations
 

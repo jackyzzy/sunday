@@ -1,4 +1,4 @@
-"""Gateway 守护进程入口：python -m sunday.gateway"""
+"""Sunday Service 守护进程入口：python -m sunday.service"""
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +11,7 @@ import click
 
 
 def _setup_logging() -> None:
-    """配置根 Logger：stderr 控制台 + 轮转文件（~/.sunday/logs/gateway.log）。"""
+    """配置根 Logger：stderr 控制台 + 轮转文件（~/.sunday/logs/service.log）。"""
     log_level_name = os.environ.get("SUNDAY_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
 
@@ -27,7 +27,7 @@ def _setup_logging() -> None:
     root.addHandler(console_handler)
 
     file_handler = RotatingFileHandler(
-        log_dir / "gateway.log",
+        log_dir / "service.log",
         maxBytes=5 * 1024 * 1024,  # 5 MB
         backupCount=3,
         encoding="utf-8",
@@ -39,15 +39,15 @@ def _setup_logging() -> None:
 @click.command()
 @click.option("--port", default=7899, type=int, help="WebSocket 监听端口")
 def main(port: int) -> None:
-    """启动 Sunday Gateway 守护进程。"""
+    """启动 Sunday Service 守护进程。"""
     _setup_logging()
 
     from sunday.config import settings
-    from sunday.gateway.server import Gateway
+    from sunday.service.server import SundayService
 
-    gw = Gateway(settings)
+    svc = SundayService(settings)
     try:
-        asyncio.run(gw.start(port=port))
+        asyncio.run(svc.start(port=port))
     except KeyboardInterrupt:
         pass
 

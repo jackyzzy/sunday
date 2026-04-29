@@ -41,7 +41,7 @@ async def test_model_sets_override():
 
 async def test_abort_sends_abort_message():
     """/abort 通过 ws 发送 abort 消息"""
-    from sunday.gateway.protocol import EventType, Message
+    from sunday.service.protocol import EventType, Message
     handler, app, ws = _make_handler()
     await handler.handle("/abort")
     ws.send.assert_called_once()
@@ -52,7 +52,7 @@ async def test_abort_sends_abort_message():
 
 async def test_new_sends_slash_new():
     """/new 发送 slash new 消息"""
-    from sunday.gateway.protocol import EventType, Message
+    from sunday.service.protocol import EventType, Message
     handler, app, ws = _make_handler()
     await handler.handle("/new")
     ws.send.assert_called_once()
@@ -64,7 +64,7 @@ async def test_new_sends_slash_new():
 
 async def test_sessions_sends_slash_sessions():
     """/sessions 发送 slash sessions 消息"""
-    from sunday.gateway.protocol import EventType, Message
+    from sunday.service.protocol import EventType, Message
     handler, app, ws = _make_handler()
     await handler.handle("/sessions")
     ws.send.assert_called_once()
@@ -92,7 +92,7 @@ async def test_unknown_command_returns_error():
 
 async def test_session_switch_clears_chat_and_fetches_history():
     """/session <id> 切换后：清空 ChatLog 并发送 /history 请求。"""
-    from sunday.gateway.protocol import EventType, Message
+    from sunday.service.protocol import EventType, Message
 
     ws = MagicMock()
     ws.send = AsyncMock()

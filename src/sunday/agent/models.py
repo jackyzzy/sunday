@@ -3,9 +3,21 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+StepType = Literal["research", "analysis", "synthesis", "generic"]
+"""Step 任务模式（task-mode-based prompt 路由）：
+
+- research：调研类，需要联网搜集事实
+- analysis：分析类，对已有信息做推理 / 比较 / 评估
+- synthesis：综合类，把多个步骤的产出整合为最终交付物
+- generic：无特殊任务模式，走默认 executor/verifier prompt
+
+generic 是合法默认值（不是 fallback）。Executor 选 prompt 时显式 mapping：
+generic → executor_system.md；其他 → executor_{type}.md（不存在 raise）。
+"""
 
 
 class ThinkingLevel(str, Enum):
@@ -50,12 +62,15 @@ class Step(BaseModel):
     Verifier 据此审计是否真有联网调用。False 时：纯写作/合成步骤，无需联网。
     默认 False 兼容老 plan JSON。
     """
-    step_type: str | None = None
-    """步骤类型提示，用于选择最优 executor / verifier prompt。
+    step_type: StepType = "generic"
+    """步骤任务模式，必填 enum，用于路由 executor / verifier prompt。
 
-    通过命名约定路由：executor_{step_type}.md / verify_{step_type}.md。
-    可用 step_type 由 configs/templates/step_types.yaml 描述。
-    None 时 fallback 到默认 prompt（executor_system / verify）。
+    - generic（默认）：走默认 executor_system.md / verify.md
+    - research/analysis/synthesis：必须有对应 executor_{type}.md / verify_{type}.md，
+      找不到 raise ValueError（loud fail，避免静默回退）
+
+    业界 task-mode-based prompt 流派的实现。新增 task_type =
+    enum 加值 + 加 prompt 文件，零代码改动。
     """
 
 
@@ -144,7 +159,7 @@ class AgentState(BaseModel):
 
     session_id: str
     task: str
-    turn_id: str = ""  # gateway 由 server 注入；CLI 由 cli.py 生成
+    turn_id: str = ""  # service 由 server 注入；CLI 由 cli.py 生成
     history: list[Message] = Field(default_factory=list)
     session_thread: SessionThread | None = None  # 跨轮主线摘要，Planner 用于保持主题锚定
     plan: Plan | None = None

@@ -1,7 +1,7 @@
-"""sunday.gateway.continuation 单元测试。"""
+"""sunday.service.continuation 单元测试。"""
 from __future__ import annotations
 
-from sunday.gateway.continuation import (
+from sunday.service.continuation import (
     build_effective_task,
     is_continuation_cue,
     resolve_continuation,

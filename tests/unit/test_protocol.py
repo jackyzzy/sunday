@@ -1,7 +1,7 @@
-"""T5-1 验证：Gateway 通信协议"""
+"""T5-1 验证：Service 通信协议"""
 from __future__ import annotations
 
-from sunday.gateway.protocol import EventType, Message
+from sunday.service.protocol import EventType, Message
 
 
 def test_client_event_types_defined():

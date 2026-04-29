@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
@@ -87,6 +87,9 @@ class MemoryConfig(BaseModel):
     log_retention_days: int = 30
     l0_max_lines: int = 100
     history_max_chars: int = 2000   # 多轮对话历史单条消息最大字符数
+
+    backend: Literal["local", "http"] = "local"
+    """Memory 后端实现。当前仅 local（文件系统）；http 预留给未来远程 Memory 服务。"""
 
 
 class ToolsConfig(BaseModel):

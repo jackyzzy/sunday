@@ -41,7 +41,7 @@ class SlashCommandHandler:
     """解析并执行 Slash 命令。
 
     app: TUI App 对象（持有 session_id、thinking_level 等状态）
-    ws:  WebSocket 连接（用于向 Gateway 发送消息）
+    ws:  WebSocket 连接（用于向 Service 发送消息）
     """
 
     def __init__(self, app, ws) -> None:
@@ -102,24 +102,24 @@ class SlashCommandHandler:
         return f"模型已切换为：{args}"
 
     async def _cmd_abort(self) -> str:
-        from sunday.gateway.protocol import EventType, Message
+        from sunday.service.protocol import EventType, Message
         msg = Message(type=EventType.ABORT, session_id=self._app.session_id)
         await self._ws.send(msg.to_json())
         return "已发送中止请求"
 
     async def _cmd_new(self) -> str:
-        from sunday.gateway.protocol import EventType, Message
+        from sunday.service.protocol import EventType, Message
         msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
                       data={"command": "new", "args": ""})
         await self._ws.send(msg.to_json())
         return "已请求创建新会话"
 
     async def _cmd_sessions(self) -> str:
-        from sunday.gateway.protocol import EventType, Message
+        from sunday.service.protocol import EventType, Message
         msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
                       data={"command": "sessions", "args": ""})
         await self._ws.send(msg.to_json())
-        return None  # 结果由 Gateway 事件推回
+        return None  # 结果由 Service 事件推回
 
     async def _cmd_session(self, args: str) -> str:
         if not args:
@@ -134,50 +134,50 @@ class SlashCommandHandler:
             self._app.query_one(ChatLog).clear()
         except Exception:
             logger.debug("切换 session 时清空 ChatLog 失败（忽略）")
-        # 异步拉取目标 session 历史（走现有 /history 通道，结果由 Gateway 推回）
+        # 异步拉取目标 session 历史（走现有 /history 通道，结果由 Service 推回）
         await self._cmd_history()
         return f"已切换到会话：{normalized}"
 
     async def _cmd_reset(self) -> str:
-        from sunday.gateway.protocol import EventType, Message
+        from sunday.service.protocol import EventType, Message
         msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
                       data={"command": "reset", "args": ""})
         await self._ws.send(msg.to_json())
         return "会话上下文已重置"
 
     async def _cmd_memory(self, args: str) -> str:
-        from sunday.gateway.protocol import EventType, Message
+        from sunday.service.protocol import EventType, Message
         msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
                       data={"command": "memory", "args": args or "MEMORY"})
         await self._ws.send(msg.to_json())
-        return None  # 结果由 Gateway 推回
+        return None  # 结果由 Service 推回
 
     async def _cmd_skills(self) -> str:
-        from sunday.gateway.protocol import EventType, Message
+        from sunday.service.protocol import EventType, Message
         msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
                       data={"command": "skills", "args": ""})
         await self._ws.send(msg.to_json())
         return None
 
     async def _cmd_history(self) -> str:
-        from sunday.gateway.protocol import EventType, Message
+        from sunday.service.protocol import EventType, Message
         msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
                       data={"command": "history", "args": ""})
         await self._ws.send(msg.to_json())
-        return None  # 结果由 Gateway 推回
+        return None  # 结果由 Service 推回
 
     async def _cmd_delete(self, args: str) -> str | None:
         if not args:
             return "[错误] 请指定要删除的 session ID，用法：/delete <session_id>"
-        from sunday.gateway.protocol import EventType, Message
+        from sunday.service.protocol import EventType, Message
         normalized = args.strip().replace("_", "-")
         msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
                       data={"command": "delete", "args": normalized})
         await self._ws.send(msg.to_json())
-        return None  # 结果由 Gateway 推回
+        return None  # 结果由 Service 推回
 
     async def _cmd_trust(self) -> str:
-        from sunday.gateway.protocol import EventType, Message
+        from sunday.service.protocol import EventType, Message
         msg = Message(type=EventType.SLASH, session_id=self._app.session_id,
                       data={"command": "trust", "args": ""})
         await self._ws.send(msg.to_json())

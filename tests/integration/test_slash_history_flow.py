@@ -1,6 +1,6 @@
 """`/history` slash 命令端到端集成测试。
 
-验证三轮对话后输入 /history，Gateway 返回的 SLASH_RESULT payload：
+验证三轮对话后输入 /history，Service 返回的 SLASH_RESULT payload：
 - command == "history"
 - session_thread 非空
 - turns 长度 = 3，且每条含 user_input / plan_goal / output / turn_index
@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, patch
 import websockets
 import yaml
 
-from sunday.gateway.protocol import EventType, Message
+from sunday.service.protocol import EventType, Message
 
 
 def _prepare_configs(tmp_path):
@@ -38,7 +38,10 @@ def _prepare_configs(tmp_path):
 
 def _make_settings(tmp_path):
     from sunday.config import Settings
+
+    from tests.conftest import seed_workspace
     configs_dir = _prepare_configs(tmp_path)
+    seed_workspace(tmp_path / "workspace")
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
         "SUNDAY_CONFIGS_DIR": str(configs_dir),
@@ -48,10 +51,10 @@ def _make_settings(tmp_path):
         return s
 
 
-async def _start_gateway(tmp_path, mock_loop_run):
-    from sunday.gateway.server import Gateway
+async def _start_service(tmp_path, mock_loop_run):
+    from sunday.service.server import SundayService
     settings = _make_settings(tmp_path)
-    gw = Gateway(settings)
+    gw = SundayService(settings)
     gw._mock_loop_run = mock_loop_run
     port = await gw.start_test()
     return gw, port
@@ -109,7 +112,7 @@ async def test_slash_history_returns_turns_and_thread(tmp_path):
     ]
 
     with patch("sunday.agent.llm_client.LLMClient.call_text", new=call_text):
-        gw, port = await _start_gateway(tmp_path, fake_run)
+        gw, port = await _start_service(tmp_path, fake_run)
         try:
             async with websockets.connect(f"ws://localhost:{port}") as ws:
                 sid = "histflow0001"

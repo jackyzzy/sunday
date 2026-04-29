@@ -10,7 +10,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Header, Label
 
-from sunday.gateway.protocol import EventType, Message
+from sunday.service.protocol import EventType, Message
 from sunday.tui.commands import SlashCommandHandler
 from sunday.tui.widgets.chat_log import ChatLog
 from sunday.tui.widgets.input_bar import InputBar
@@ -18,7 +18,7 @@ from sunday.tui.widgets.status_bar import StatusBar
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_GATEWAY_URL = "ws://localhost:7899"
+DEFAULT_SERVICE_URL = "ws://localhost:7899"
 
 
 def _copy_to_clipboard(text: str) -> bool:
@@ -192,12 +192,12 @@ class SundayApp(App):
 
     def __init__(
         self,
-        gateway_url: str = DEFAULT_GATEWAY_URL,
+        service_url: str = DEFAULT_SERVICE_URL,
         auto_connect: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        self.gateway_url = gateway_url
+        self.service_url = service_url
         self.auto_connect = auto_connect
         self.session_id: str = str(uuid.uuid4())
         # 从配置读取初始值
@@ -234,13 +234,13 @@ class SundayApp(App):
 
     @work(exclusive=False, thread=False)
     async def _connect_worker(self) -> None:
-        """后台 Worker：连接 Gateway，循环接收事件，断连后自动重连。"""
+        """后台 Worker：连接 Service，循环接收事件，断连后自动重连。"""
         import websockets
 
         while True:
             try:
                 async with websockets.connect(
-                    self.gateway_url, ping_interval=None
+                    self.service_url, ping_interval=None
                 ) as ws:
                     self._ws = ws
                     self._slash_handler = SlashCommandHandler(app=self, ws=ws)
@@ -249,20 +249,20 @@ class SundayApp(App):
                 self._ws = None
                 await asyncio.sleep(1)
             except OSError:
-                # Gateway 未启动，不重连，只提示一次
+                # Service 未启动，不重连，只提示一次
                 self._ws = None
                 self.query_one(ChatLog).add_system_message(
-                    "Gateway 未连接，请先运行 sunday gateway start"
+                    "Service 未连接，请先运行 sunday service start"
                 )
                 break
             except Exception as e:
                 # 其他异常（含 ConnectionClosed）：短暂等待后重连
-                logger.warning("Gateway 连接断开，尝试重连：%s", e)
+                logger.warning("Service 连接断开，尝试重连：%s", e)
                 self._ws = None
                 await asyncio.sleep(1)
 
     async def _recv_loop(self, ws) -> None:
-        """持续接收 Gateway 推送事件。"""
+        """持续接收 Service 推送事件。"""
         async for raw in ws:
             try:
                 import json
@@ -272,7 +272,7 @@ class SundayApp(App):
                 logger.warning("事件处理失败：%s", e)
 
     async def handle_gateway_event(self, data: dict) -> None:
-        """处理 Gateway 推送的事件，更新 UI 组件。"""
+        """处理 Service 推送的事件，更新 UI 组件。"""
         event_type = data.get("type", "")
         payload = data.get("data", {})
         chat = self.query_one(ChatLog)
@@ -376,7 +376,7 @@ class SundayApp(App):
                 self.query_one(ChatLog).add_system_message(result)
             return
 
-        # 普通消息：显示并发送到 Gateway
+        # 普通消息：显示并发送到 Service
         self.query_one(ChatLog).add_user_message(text)
         if self._ws:
             try:

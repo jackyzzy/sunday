@@ -54,26 +54,32 @@ class Executor:
         self._executor_prompt_override = executor_prompt_override
         self._system_prompt: str | None = None
 
-    def _get_system_prompt(self, step_type: str | None = None) -> str:
-        """三级优先级返回 system prompt：
+    def _get_system_prompt(self, step_type: str = "generic") -> str:
+        """按 step_type 显式 mapping 返回 system prompt：
 
-        1. NodeConfig.executor_prompt 静态覆盖（构造时注入）
-        2. step_type 命名约定：executor_{step_type}.md（若文件存在）
-        3. 默认 executor_system.md（缓存）
+        1. executor_prompt_override 静态覆盖（构造时注入，绕过 step_type 路由）
+        2. step_type="generic" → executor_system.md（缓存）
+        3. step_type ∈ {research, analysis, synthesis} → executor_{type}.md，
+           找不到对应文件时 raise ValueError（loud fail，不静默回退）
         """
         # 1. 静态覆盖
         if self._executor_prompt_override:
             return self.config.load_prompt(self._executor_prompt_override)
-        # 2. step_type 命名约定
-        if step_type:
-            try:
-                return self.config.load_prompt(f"executor_{step_type}")
-            except FileNotFoundError:
-                pass  # fallback 到默认
-        # 3. 默认 prompt（仅默认路径走缓存）
-        if self._system_prompt is None:
-            self._system_prompt = self.config.load_prompt("executor_system")
-        return self._system_prompt
+
+        # 2. generic → 默认 prompt（缓存）
+        if step_type == "generic":
+            if self._system_prompt is None:
+                self._system_prompt = self.config.load_prompt("executor_system")
+            return self._system_prompt
+
+        # 3. 显式 task-mode prompt — 找不到时 loud fail
+        try:
+            return self.config.load_prompt(f"executor_{step_type}")
+        except FileNotFoundError as e:
+            raise ValueError(
+                f"step_type={step_type!r} 要求 executor_{step_type}.md 存在，但加载失败：{e}。"
+                f"请新增该 prompt 文件，或把 step_type 改为 generic。"
+            ) from e
 
     async def run(self, step: Step, state: AgentState) -> StepResult:
         """执行单个步骤，返回 StepResult。网络错误转为 FAILED 结果，不向上传播。"""

@@ -1,7 +1,7 @@
 """ReactAgent — 顶层 ReAct Agent。
 
 执行流程：
-    Gateway/CLI 通过 build_agent_loop() 构造 ReactAgent
+    Service/CLI 通过 build_agent_loop() 构造 ReactAgent
         → run(state)
             → inject_memory_context()   # L0/L1/L2 上下文注入（走 MemoryClient）
             → plan(state)               # THINK + PLAN
@@ -51,12 +51,15 @@ class ReactAgent:
         config: "SundayConfig",
         memory_client: "MemoryClient",
         emit: EmitCallable | None = None,
-        mode: str = "gateway",
+        mode: str = "service",
         confirmation_handler: "ConfirmationHandler | None" = None,
     ) -> None:
-        from sunday.bootstrap import build_tool_registry
+        from sunday.bootstrap import assert_runtime_initialized, build_tool_registry
         from sunday.skills.loader import SkillLoader
         from sunday.templates.loader import TemplateLoader
+
+        # 冷启动检查：未 init 则直接报错（方向 2：Memory 黑盒，agent 不做 seed）
+        assert_runtime_initialized(config)
 
         self.config = config
         self.memory = memory_client
@@ -90,48 +93,6 @@ class ReactAgent:
             client=memory_client, skill_loader=skill_loader, config=config,
         )
         self.consolidator = Consolidator(memory_client, config)
-
-        # 首次运行时确保用户目录结构和初始 L0/L1 模板存在
-        self._ensure_user_dirs(workspace_dir, config)
-
-    @staticmethod
-    def _ensure_user_dirs(workspace_dir: Path, config: "SundayConfig") -> None:
-        """确保运行时目录结构完整，首次运行时从项目模板复制 L0/L1 初始文件。"""
-        import shutil
-
-        # 项目模板位于 <project_root>/workspace/，与 configs/ 同级；
-        # 用 configs_dir 锚定项目根，即使用户把 workspace_dir 改到任意路径也能正确定位
-        template_dir = config.configs_dir.parent / "workspace"
-
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-        # L0 用户配置文件（SOUL/AGENTS/TOOLS/RUNTIME_RULES）：从项目模板首次复制
-        if template_dir.is_dir():
-            for fname in ("SOUL.md", "AGENTS.md", "TOOLS.md", "RUNTIME_RULES.md"):
-                dest = workspace_dir / fname
-                src = template_dir / fname
-                if not dest.exists() and src.exists():
-                    shutil.copy2(src, dest)
-                    logger.info("初始化 L0 文件：%s", dest)
-
-        # 用户扩展点：空目录（即便不放内容也存在，提示用户可在此扩展）
-        # - templates/：用户自定义任务类型模板，覆盖内置（与 SkillLoader 同构）
-        # - skills/：用户自定义技能包
-        (workspace_dir / "templates").mkdir(parents=True, exist_ok=True)
-        (workspace_dir / "skills").mkdir(parents=True, exist_ok=True)
-
-        memory_dir = config.agent.memory_dir
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        (memory_dir / "daily").mkdir(parents=True, exist_ok=True)
-        if template_dir.is_dir():
-            for fname in ("MEMORY.md", "USER.md"):
-                dest = memory_dir / fname
-                src = template_dir / fname
-                if not dest.exists() and src.exists():
-                    shutil.copy2(src, dest)
-                    logger.info("初始化 L1 文件：%s", dest)
-
-        config.agent.sessions_dir.mkdir(parents=True, exist_ok=True)
-        config.agent.log_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 主入口 ───────────────────────────────────────────────────────────────
 
@@ -399,14 +360,18 @@ class ReactAgent:
 
         executor_prompt_override = node_cfg.executor_prompt if node_cfg else None
         _emit = emit or self.emit
+        # 测试可能用 __new__ 绕过 __init__，此时 self.templates 不存在 → 容错为 None
+        templates = getattr(self, "templates", None)
         if use_simple:
             return SimpleNode(
                 self.config, registry, emit=_emit,
                 executor_prompt_override=executor_prompt_override,
+                templates=templates,
             )
         return Team(
             self.config, registry, emit=_emit,
             executor_prompt_override=executor_prompt_override,
+            templates=templates,
         )
 
     # ── 辅助方法 ────────────────────────────────────────────────────────────
@@ -537,8 +502,8 @@ def _elapsed(start_ts: datetime) -> float:
 def _map_emit_to_log(event_type: str, data: dict) -> tuple[str, dict] | None:
     """把 emit 事件映射为 logs/ 写入用的语义化事件 + 字段裁剪。
 
-    Gateway 模式 stream.jsonl 已记录原始事件流；这里输出的是用于人工 / jq
-    分析的精简版（CLI 与 Gateway 行为一致）。
+    Service 模式 stream.jsonl 已记录原始事件流；这里输出的是用于人工 / jq
+    分析的精简版（CLI 与 Service 行为一致）。
     """
     if event_type == "status":
         status_val = data.get("status", "")

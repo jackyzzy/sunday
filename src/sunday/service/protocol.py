@@ -1,4 +1,4 @@
-"""Phase 5：Gateway 通信协议 — EventType + Message"""
+"""Phase 5：Service 通信协议 — EventType + Message"""
 from __future__ import annotations
 
 import json

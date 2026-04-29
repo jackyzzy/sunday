@@ -5,11 +5,15 @@ L2：memory/daily/YYYY-MM-DD.md（每日摘要）
 
 TTL 清理：以后台任务方式定期扫描 daily/ 目录，删除超过 retention_days
 的过期文件。任务在 close() 时优雅取消。
+
+ensure_seeded(template_dir) 是首次部署的 seed 入口（由 sunday init 调用）：
+从项目模板复制缺失的 L1 文件（MEMORY.md / USER.md）。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -129,6 +133,24 @@ class LocalKnowledgeClient:
     async def read_daily(self, day: date) -> str:
         path = self._daily_dir / f"{day.isoformat()}.md"
         return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    async def ensure_seeded(self, template_dir: Path) -> list[str]:
+        """从项目模板首次复制 L1 文件（MEMORY.md / USER.md）。幂等。"""
+        seeded: list[str] = []
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._daily_dir.mkdir(parents=True, exist_ok=True)
+
+        if not template_dir.is_dir():
+            return seeded
+
+        for fname in ("MEMORY.md", "USER.md"):
+            dest = self._dir / fname
+            src = template_dir / fname
+            if not dest.exists() and src.exists():
+                shutil.copy2(src, dest)
+                logger.info("seed L1 文件：%s", dest)
+                seeded.append(fname)
+        return seeded
 
     # ── 生命周期 ──────────────────────────────────────────────────────────
 

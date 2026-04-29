@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, patch
 import websockets
 import yaml
 
-from sunday.gateway.protocol import EventType, Message
+from sunday.service.protocol import EventType, Message
 
 
 def _prepare_configs(tmp_path):
@@ -47,7 +47,10 @@ def _prepare_configs(tmp_path):
 
 def _make_settings(tmp_path):
     from sunday.config import Settings
+
+    from tests.conftest import seed_workspace
     configs_dir = _prepare_configs(tmp_path)
+    seed_workspace(tmp_path / "workspace")
     with patch.dict(os.environ, {
         "ANTHROPIC_API_KEY": "sk-ant-fake",
         "SUNDAY_CONFIGS_DIR": str(configs_dir),
@@ -57,10 +60,10 @@ def _make_settings(tmp_path):
         return s
 
 
-async def _start_gateway(tmp_path, mock_loop_run):
-    from sunday.gateway.server import Gateway
+async def _start_service(tmp_path, mock_loop_run):
+    from sunday.service.server import SundayService
     settings = _make_settings(tmp_path)
-    gw = Gateway(settings)
+    gw = SundayService(settings)
     gw._mock_loop_run = mock_loop_run
     port = await gw.start_test()
     return gw, port
@@ -82,7 +85,7 @@ async def _recv_until(ws, target_type: str, timeout: float = 5.0) -> dict:
 
 
 async def _wait_task_finished(gw, session_id: str):
-    """等待 Gateway 内 running_task 彻底结束（含 finally 的 write_turn + update_thread）。"""
+    """等待 Service 内 running_task 彻底结束（含 finally 的 write_turn + update_thread）。"""
     task = gw._running_tasks.get(session_id)
     if task is None:
         return
@@ -129,7 +132,7 @@ async def test_three_turns_build_up_session_thread(tmp_path):
     call_text = AsyncMock(side_effect=thread_responses)
 
     with patch("sunday.agent.llm_client.LLMClient.call_text", new=call_text):
-        gw, port = await _start_gateway(tmp_path, fake_loop_run)
+        gw, port = await _start_service(tmp_path, fake_loop_run)
         try:
             async with websockets.connect(f"ws://localhost:{port}") as ws:
                 sid = "multiturn01"
@@ -190,7 +193,7 @@ async def test_aborted_turn_does_not_pollute_thread(tmp_path):
     call_text = AsyncMock(return_value=json.dumps({"summary": "x", "key_entities": []}))
 
     with patch("sunday.agent.llm_client.LLMClient.call_text", new=call_text):
-        gw, port = await _start_gateway(tmp_path, aborting_run)
+        gw, port = await _start_service(tmp_path, aborting_run)
         try:
             async with websockets.connect(f"ws://localhost:{port}") as ws:
                 sid = "abortsession1"

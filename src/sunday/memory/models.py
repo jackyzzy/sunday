@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,11 +24,21 @@ __all__ = [
     "LogEvent",
     "RuntimeRules",
     "SessionThread",
+    "new_turn_id",
 ]
 
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def new_turn_id(turn_index: int) -> str:
+    """生成可读、单调可排序的 turn_id：`t{index:03d}-{short_uuid}`。
+
+    例：t001-ab12cd、t002-3f4a5b。同 session 下按字典序天然递增，
+    日志 / 调试时一眼识别归属（与 8 位裸 UUID 相比体验更好）。
+    """
+    return f"t{turn_index:03d}-{uuid.uuid4().hex[:6]}"
 
 
 class SessionMeta(BaseModel):

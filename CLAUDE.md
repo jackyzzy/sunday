@@ -93,7 +93,7 @@ SUB-PLAN（1~3 个子步骤，继承父 step 的 realtime 标记）→ EXECUTE�
 
 **两条注册路径，必须同步维护：**
 - CLI 模式：`src/sunday/cli.py` → `_run_task()`
-- TUI/Gateway 模式：`src/sunday/gateway/server.py` → `_build_agent_loop()`
+- TUI/Service 模式：`src/sunday/service/server.py` → `_build_agent_loop()`
 
 技能工具声明方式（`skills/*/` 目录下任意 `.py` 文件末尾，文件名不限）：
 ```python

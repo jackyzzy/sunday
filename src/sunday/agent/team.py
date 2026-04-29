@@ -13,6 +13,7 @@ from sunday.agent.verifier import Verifier
 if TYPE_CHECKING:
     from sunday.agent.executor import ToolRegistryProtocol
     from sunday.config import SundayConfig
+    from sunday.templates.loader import TemplateLoader
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,9 @@ class Team:
         tool_registry: "ToolRegistryProtocol",
         emit: EmitCallable | None = None,
         executor_prompt_override: str | None = None,
+        templates: "TemplateLoader | None" = None,
     ) -> None:
-        self.planner = Planner(config)
+        self.planner = Planner(config, templates=templates)
         self.executor = Executor(
             config,
             tool_registry=tool_registry,
@@ -72,6 +74,16 @@ class Team:
             return TeamResult(step_id=step.id, passed=False, output=f"子规划失败：{e}")
 
         sub_state.plan = sub_plan
+        # 实时性继承（S2-F）：父步骤要求联网时，子步骤默认继承标记；
+        # 例外：step_type="synthesis" 的子步骤是基于已收数据的整合，无需再联网
+        if step.requires_realtime_data:
+            for sub in sub_plan.steps:
+                if not sub.requires_realtime_data and sub.step_type != "synthesis":
+                    logger.debug(
+                        "继承父步骤 %s 的实时性标记到子步骤 %s（LLM 未显式设置）",
+                        step.id, sub.id,
+                    )
+                    sub.requires_realtime_data = True
         logger.debug("Team %s 子规划完成，共 %d 个子步骤", step.id, len(sub_plan.steps))
 
         # 串行执行子步骤（支持内层重规划）

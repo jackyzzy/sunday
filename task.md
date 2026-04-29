@@ -13,7 +13,7 @@ Phase 1：基础骨架        → 可跑通最简单的命令行对话
 Phase 2：Agent 核心      → 完整的 think→plan→execute→verify 循环
 Phase 3：记忆系统        → 跨会话持久记忆与上下文注入
 Phase 4：工具与技能      → CLI 工具、MCP、技能包
-Phase 5：Gateway + TUI   → 守护进程 + 终端界面
+Phase 5：Service + TUI   → 守护进程 + 终端界面
 Phase 6：实用技能        → 日常办公自动化技能落地
 ```
 
@@ -258,13 +258,13 @@ Phase 6：实用技能        → 日常办公自动化技能落地
 
 ---
 
-## Phase 5：Gateway + TUI
+## Phase 5：Service + TUI
 
 **目标**：实现本地守护进程和终端交互界面，完成完整的 edge agent 体验。
 
 > **Phase 5 开始前**：为每个 Task 填写验证方案（测试文件、函数名、安全约束），经确认后再开始实现。
 
-### T5-1 Gateway 通信协议
+### T5-1 Service 通信协议
 - [ ] 实现 `src/sunday/gateway/protocol.py`
   - `EventType`（枚举，含客户端→服务端和服务端→客户端全部类型）
   - `Message`（type, session_id, data, ts）
@@ -279,9 +279,9 @@ Phase 6：实用技能        → 日常办公自动化技能落地
   - `list_sessions() → list[dict]`：按 last_active 倒序
   - index.json 原子写
 
-### T5-3 Gateway Server
+### T5-3 Service Server
 - [ ] 实现 `src/sunday/gateway/server.py`
-  - `Gateway.__init__`：按 design.md §12.1 顺序初始化所有组件
+  - `SundayService.__init__`：按 design.md §12.1 顺序初始化所有组件
   - `start()` → WebSocket 服务，永久运行
   - `_handle(ws, path)` → 消息路由
   - `_handle_send`：检查串行、创建 Task、注册 done_callback
@@ -294,7 +294,7 @@ Phase 6：实用技能        → 日常办公自动化技能落地
   - `_pending_confirms`：不可逆操作 Future 字典
   - 启动时按序：配置校验 → 工作区初始化 → MCP 连接 → 工具注册 → 技能扫描 → 监听
 
-### T5-4 CLI Gateway 命令
+### T5-4 CLI Service 命令
 - [ ] 实现 `sunday gateway start`：后台启动（nohup 或 subprocess），写入 PID 文件
 - [ ] 实现 `sunday gateway stop`：读 PID 文件，发送 SIGTERM
 - [ ] 实现 `sunday gateway status`：检查 PID + WebSocket 心跳
@@ -304,7 +304,7 @@ Phase 6：实用技能        → 日常办公自动化技能落地
 ### T5-5 TUI 基础框架
 - [ ] 实现 `src/sunday/tui/app.py`
   - `SundayApp`（Textual App）5 区布局（Header / ChatLog / StatusBar / InfoBar / InputBar）
-  - WebSocket 客户端（连接 Gateway，断线重连）
+  - WebSocket 客户端（连接 Service，断线重连）
   - 键盘绑定（Ctrl+P/L/T/O/Esc）
   - Gateway 未运行时自动启动
 

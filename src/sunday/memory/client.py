@@ -2,7 +2,7 @@
 
 设计原则：
 - **单进程单实例**：由 `bootstrap.build_memory_client(settings)` 构造一次，注入到
-  CLI / Gateway / ReactAgent / ContextBuilder 等所有需要持久化的组件
+  CLI / Service / ReactAgent / ContextBuilder 等所有需要持久化的组件
 - **客户端无业务态**：不缓存索引、不持有"当前 session"，所有操作显式传 session_id
 - **Memory 内部管全部生命周期**：原子性、并发协调、TTL、索引一致性都在实现内部
 - **REST 友好**：sub-client 方法直接对应未来 HTTP API 端点（`sessions.write_turn`
@@ -81,6 +81,14 @@ class KnowledgeClient(Protocol):
     async def read_layer(self, layer: KnowledgeLayer) -> str: ...
     async def read_daily(self, day: date) -> str: ...
 
+    async def ensure_seeded(self, template_dir: Path) -> list[str]: ...
+    """从项目模板首次复制 L1 文件（MEMORY.md / USER.md）到记忆目录。
+
+    - 仅复制目标尚不存在的文件，幂等
+    - 返回本次新建的文件名列表（用于上报"已 seed"）
+    - HTTP 实现可走另一种 seed 协议（例如 POST /seed），调用方语义不变
+    """
+
 
 class LogsClient(Protocol):
     """logs：每会话结构化执行日志（logs/{session_id}.jsonl）。"""
@@ -98,6 +106,15 @@ class WorkspaceClient(Protocol):
     async def read(self, name: WorkspaceFile) -> str: ...
     async def read_runtime_rules(self) -> "RuntimeRules": ...
     async def list_skills(self) -> list[str]: ...
+
+    async def ensure_seeded(self, template_dir: Path) -> list[str]: ...
+    """从项目模板首次复制 L0 文件（SOUL/AGENTS/TOOLS/RUNTIME_RULES）+ 创建用户扩展点
+    （templates/、skills/）到 workspace 目录。
+
+    - 仅复制目标尚不存在的文件，幂等
+    - 返回本次新建的文件名列表（用于 init 上报）
+    - HTTP 实现可走另一种 seed 协议，调用方语义不变
+    """
 
 
 @runtime_checkable

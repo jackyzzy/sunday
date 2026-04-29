@@ -1,8 +1,21 @@
 """共用 pytest fixtures — 安全隔离所有测试"""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import yaml
+
+
+def seed_workspace(workspace_dir: Path) -> None:
+    """测试辅助：在 tmp workspace 下写最小 L0 文件，让 assert_runtime_initialized 通过。
+
+    集成测试构造 Service / ReactAgent 时调用，避免每个测试重复 mkdir + 写文件。
+    """
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    soul = workspace_dir / "SOUL.md"
+    if not soul.exists():
+        soul.write_text("# Test Sunday\n", encoding="utf-8")
 
 
 @pytest.fixture
