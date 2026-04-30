@@ -27,7 +27,9 @@ Sunday 是一个本地优先的个人边端 AI 智能体，运行在用户个人
 
 - 不得硬编码 API key、模型名、关键词清单等可变数据
 - 配置通过 `src/sunday/config.py`（Pydantic Settings）统一加载
-- 关键词、阈值这类"可演化的内容"放在 [workspace/RUNTIME_RULES.md](workspace/RUNTIME_RULES.md) 而非 `agent.yaml`，由 [src/sunday/memory/runtime_rules.py](src/sunday/memory/runtime_rules.py) 解析；不同 sunday 实例可有自己的规则集
+- 关键词、阈值这类"可演化的内容"放在 [workspace/RUNTIME_RULES.md](workspace/RUNTIME_RULES.md) 而非 `agent.yaml`，由 RUNTIME_RULES 解析层统一读取；不同 sunday 实例可有自己的规则集
+- **首次部署唯一入口**：`sunday init`（互动选 provider + 收 KEY + seed L0/L1 模板）。模板 seed 走 [`MemoryClient.{workspace,knowledge}.ensure_seeded()`](src/sunday/memory/client.py)，agent 层零文件 IO（除任务报告输出）
+- **环境健康检查**：`sunday doctor` 跑 5 项检查（API KEY / 目录可写 / SOUL.md 非空 / 模板 unified diff / LLM ping）
 
 ### 记忆系统（文件优先，四层分级）
 
@@ -56,6 +58,33 @@ Sunday 是一个本地优先的个人边端 AI 智能体，运行在用户个人
 
 **Memory 服务边界**：Session = prompt 编排层（agent 侧）；Memory = 存储接口（存储侧，未来可服务化为独立 MemoryStore Protocol）
 
+### Service 单一后端 + 多客户端架构
+
+Sunday 是 **Service 单一执行后端 + 多客户端**：
+
+```
+TUI（完整功能） ──┐
+CLI（单任务测试）─┼─→ WS / Unix Socket → SundayService（src/sunday/service/server.py）
+Web（未来）   ───┘                     ├─ AgentLoop（planner/team/executor/verifier）
+                                        ├─ MemoryClient（黑盒接口）
+                                        └─ 会话生命周期 + 任务调度 + 流式推送
+```
+
+- **CLI 是 Service 客户端**：`sunday run` 通过 [`service/client.py`](src/sunday/service/client.py) 提交任务；service 不在跑时 **自动 spawn** 后台守护进程
+- **`SUNDAY_EMBED=1`** 环境变量：测试 / 调试用 in-process 模式（不 spawn 子进程）
+- **不留 deprecated alias**：原 `sunday gateway *` 命令、`Gateway` 类已彻底切换为 `service` / `SundayService`
+- **单 session 单 attach 约定**：`SundayService._connections[session_id]` 仅保留最新连接；多客户端订阅是未来扩展点（`_subscribers: dict[str, set[WS]]`）
+
+### Memory 黑盒接口（不变量）
+
+[`src/sunday/memory/client.py`](src/sunday/memory/client.py) 定义 4 个 `@runtime_checkable Protocol`（sessions / knowledge / logs / workspace），[`memory/local/`](src/sunday/memory/local/) 是 Local 实现。
+
+**不变量（Stage 1+2 落地）：**
+- **agent 层零模板 IO**：`grep -rn "shutil\|read_text\|write_text" src/sunday/agent/` 除 `_write_report` 任务报告输出外应为空
+- **模板 seed 走接口**：`WorkspaceClient.ensure_seeded(template_dir)` / `KnowledgeClient.ensure_seeded(template_dir)`，由 `bootstrap.ensure_runtime_dirs()` 串起来
+- **Backend 派发预留**：`bootstrap.build_memory_client(cfg, *, mode)` 按 `cfg.memory.backend` 派发；当前仅 `local`，`http` 抛 `NotImplementedError`
+- **Janitor 按 mode**：`mode="service"` → True；其他 → False（CLI 单任务不启 6h TTL 后台任务）
+
 ### Agent 执行循环（两层 Team 架构，不可破坏的顺序）
 
 **外层 AgentLoop（编排层）：**
@@ -75,25 +104,40 @@ SUB-PLAN（1~3 个子步骤，继承父 step 的 realtime 标记）→ EXECUTE�
 - 默认 PLAN 阶段不调外部工具；opt-in 后 FACT_CHECK 才调白名单工具（默认 `web_search` / `read_file`），预算 `max_tool_calls=2` + `timeout_seconds=10`
 - Team 共享顶层 ToolRegistry，不重复创建
 - 每个 Step 有 `requires_realtime_data: bool`：Planner 决策（三信号 — 关键词 + think 实体 + plan LLM 自判）→ Executor 遵守（system prompt 注入约束 + 代码兜底打标）→ Verifier 审计（未联网且无标签 → failed + replan）
-- 顶层评估用 `Verifier.evaluate()`，子步骤验证用 `Verifier.check()`；`Verifier.check()` 三层闸门：基础 verify → 主题一致性（`subject_consistency`，可关）→ 工具使用审计（`tool_usage_audit`，可关）
+- 顶层评估用 `Verifier.evaluate()`，子步骤验证用 `Verifier.check()`；`Verifier.check()` 三层闸门**显式短路**：基础 verify fail → 直接 return（跳过后续）；subject 不一致 → 跳过 audit；audit 失败 → 返回失败原因
 - "最终汇总/整合"类步骤的 Executor system prompt 自动追加主题锚定段（`config.quality.final_step_anchor`，可关）
+
+### Task-mode prompt 路由（PromptResolver）
+
+`Step.step_type` 是 `Literal["research", "analysis", "synthesis", "generic"]` 必填 enum。Executor / Verifier 通过 [`prompt_resolver.py`](src/sunday/agent/prompt_resolver.py) 单点解析：
+
+| step_type | Executor | Verifier |
+|-----------|----------|----------|
+| `generic` | `executor_system.md` | `verify.md` |
+| `research` | `executor_research.md` | `verify_research.md` |
+| `analysis` | `executor_analysis.md` | `verify_analysis.md` |
+| `synthesis` | `executor_synthesis.md` | `verify_synthesis.md` |
+
+规则：
+- `generic` 是合法默认值（Planner 主动声明无特殊模式），不是"忘填回退"
+- `task_type` 不是 generic 但 prompt 文件缺失 → **loud fail**（raise ValueError），避免静默降级
+- 加新 task-mode 见 [`docs/extending-task-modes.md`](docs/extending-task-modes.md)：3 步、0 行 Python 代码改动（除 enum）
+- Verifier 的 `quality.synthesis_quality_check.enabled=False` 是**调用方语义闸门**（关闭深度检查 → 显式降级 generic），不在 PromptResolver 层处理
 
 ### 工具安全原则
 - 所有不可逆操作（删除文件、发送邮件、git push）必须向用户确认后执行
 - CLI 工具调用必须经过 `tools/cli_tool.py` 封装，不得直接 `subprocess.run`
 - 工具结果必须经过 Tool Result Guard 验证再返回给模型
 
-### 工具注册规范（CLI 和 TUI 两种模式均须遵守）
+### 工具注册规范（统一通过 bootstrap 工厂）
 
-所有工具按以下顺序注册，后加载可覆盖前加载（用户工具优先级最高）：
+所有工具由 [`bootstrap.build_tool_registry(cfg, confirmation_handler)`](src/sunday/bootstrap.py) 单点构造，按以下顺序注册，后加载可覆盖前加载（用户工具优先级最高）：
 
 1. `register_cli_tools(registry)`             ← 内置工具（最低优先级）
 2. `load_skill_tools(skills_dir, registry)`   ← 技能工具
 3. `load_user_tools(workspace_dir, registry)` ← 用户自定义（最高优先级）
 
-**两条注册路径，必须同步维护：**
-- CLI 模式：`src/sunday/cli.py` → `_run_task()`
-- TUI/Service 模式：`src/sunday/service/server.py` → `_build_agent_loop()`
+**只有一条注册路径**：Service 启动 `_build_agent_loop()` 时调 `build_tool_registry()` —— 因为 CLI 已是 Service 客户端，不再 in-process 构造工具。这是 Stage 1（S1-B/S1-C）的核心改动：消除原"CLI/Gateway 双 in-process 路径"。
 
 技能工具声明方式（`skills/*/` 目录下任意 `.py` 文件末尾，文件名不限）：
 ```python
@@ -140,8 +184,9 @@ Shell 工具：`.sh` 文件头部加 YAML frontmatter 注释（`# ---` 包裹 na
 - 异步优先：agent loop、tool 调用、TUI 更新都使用 `async/await`
 
 ### 文件操作
-- 不直接操作 `~/.sunday/` 下的文件，通过 `memory/manager.py` 的接口
-- 记忆文件写入必须是追加或原子替换，不得部分写入
+- **agent 层零模板 IO 不变量**：`src/sunday/agent/` 下不应出现 `shutil` / `Path.read_text` / `Path.write_text`，除任务报告输出（`_write_report`）外
+- 所有持久化通过 `MemoryClient` 4 个 sub-client（`sessions / knowledge / logs / workspace`）的接口走，不直接操作 `~/.sunday/` 下文件
+- 记忆文件写入必须是追加或原子替换（`memory/_io.py:atomic_write_text`），不得部分写入
 
 ### 错误处理
 - ReAct 循环 `max_steps=10`，超出后抛出 `MaxStepsError` 并通知用户
@@ -204,8 +249,10 @@ done
 ```
 
 **实现位置：**
-- `src/sunday/agent/session_log.py` — `SessionLog` 类（事件路由与写入）
 - `src/sunday/agent/react_agent.py` — `run()` 内的 `logged_emit` 包装；`_create_node()` 将 `logged_emit` 传入 Team/SimpleNode
+- 日志写入接口：`MemoryClient.logs.emit()` / `read()`，由 `LocalLogsClient` 持久化到 `~/.sunday/logs/{session_id}.jsonl`
+
+**turn_id 格式（S3-B）**：`t{index:03d}-{short_uuid_6}`（如 `t001-fd2fd8`），同 session 字典序天然单调，调试时一眼识别归属。由 [`memory.models.new_turn_id(turn_index)`](src/sunday/memory/models.py) 单点生成。
 
 ---
 
@@ -231,11 +278,15 @@ done
 - 不在 PLAN 阶段执行真实工具调用
 - 不修改 `workspace/SOUL.md` 的内容（这是用户的配置领域）
 - 不创建不必要的抽象或工具函数（三行相似代码优于过早抽象）
+- **不在 agent 层做模板 / 记忆文件 IO**（违反 Memory 黑盒不变量）—— 一律走 `MemoryClient` sub-client 接口
+- **不在 CLI 进程内 in-process 构造 ReactAgent**（违反 Service 单一后端）—— CLI 是 `ServiceClient` 的薄包装
+- **不静默回退 task-mode prompt**：`step_type` 不是 generic 但 prompt 文件缺失必须 raise，不能 fallback 到 default
 
 ---
 
 ## 参考资源
 
+- 加新 task-mode：[docs/extending-task-modes.md](docs/extending-task-modes.md)
 - Agno 文档：通过 `mcp__context7__resolve-library-id` 查询 `agno`
 - OpenClaw 架构参考：`mcp__deepwiki__ask_question` 查询 `openclaw/openclaw`
-- 项目需求：`specs.md`
+- 项目需求：`specs.md`（v0.1 原始规格 + 末尾 v0.2 实施变更说明）

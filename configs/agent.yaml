@@ -1,10 +1,9 @@
 agent:
   name: Sunday
-  workspace_dir: .sunday/workspace   # L0：用户静态配置（SOUL/AGENTS/TOOLS）
-  memory_dir: .sunday/memory         # L1+L2：AI 维护的动态记忆（MEMORY/USER/daily）
-  sessions_dir: .sunday/sessions     # L3：会话详细记录（reports 子目录在此下）
+  workspace_dir: .sunday/workspace
+  memory_dir: .sunday/memory
+  sessions_dir: .sunday/sessions
   log_dir: .sunday/logs
-
 model:
   provider: openai
   id: deepseek-chat
@@ -12,89 +11,64 @@ model:
   max_tokens: 8192
   base_url: https://api.deepseek.com/v1
   api_key_env: DEEPSEEK_API_KEY
-
 reasoning:
-  max_steps: 20               # 任务顶层步骤数上限（超出则截断）
-  max_react_iteration: 40     # 单个子步骤内 ReAct 工具调用轮次上限
-  max_replans_per_step: 10    # Team 内层每个子步骤最多重规划次数
-  max_replans: 40             # 整个任务外层重规划总次数兜底上限
-  thinking_level: medium      # off | minimal | low | medium | high
-
+  max_steps: 20
+  max_react_iteration: 40
+  max_replans_per_step: 10
+  max_replans: 40
+  thinking_level: medium
 memory:
-  consolidation_cron: "0 4 * * *"
+  consolidation_cron: 0 4 * * *
   log_retention_days: 30
   l0_max_lines: 100
-  history_max_chars: 2000   # 多轮对话历史单条消息最大字符数
-
+  history_max_chars: 2000
 tools:
   default_timeout: 60
   max_output_chars: 20480
   sandbox_mode: true
   allow_list: []
   deny_list:
-    - "rm -rf"
-    - "dd if="
-
+  - rm -rf
+  - dd if=
 mcp:
   servers: []
-
 skills:
   extra_dirs: []
-
-# 质量控制开关 — 保留开关便于以后在性能/成本层做取舍
-# 注：关键词清单等"运行数据"在 workspace/RUNTIME_RULES.md（L0），不在此文件
 quality:
   fact_check:
-    enabled: false                   # 默认关：Plan 阶段保持纯粹（仅 LLM 推理，不调工具）
-                                     # 仅当需要在 plan 时联网核实跨会话记忆时才开
+    enabled: false
     max_tool_calls: 2
     timeout_seconds: 10
     allowed_tools:
-      - web_search
-      - read_file
+    - web_search
+    - read_file
   subject_consistency:
-    enabled: true                    # 验证阶段主题一致性检查
-    checker: llm                     # llm | keyword | small_model（未来预留）
+    enabled: true
+    checker: llm
   final_step_anchor:
-    enabled: true                    # 最终步骤输出锚定当前任务主题
-    intent_keywords:                 # 命中任一关键词即视为"最终汇总步骤"
-      - 整合
-      - 总结
-      - 汇总
-      - 最终
-      - 综合
-      - 清单
-      - 建议
-      - 报告
+    enabled: true
+    intent_keywords:
+    - 整合
+    - 总结
+    - 汇总
+    - 最终
+    - 综合
+    - 清单
+    - 建议
+    - 报告
   realtime_hints:
-    enabled: true                    # 在 plan 前聚合"实时数据需求"信号注入 plan prompt
-                                     # 关键词清单读自 workspace/RUNTIME_RULES.md
+    enabled: true
   offline_output_label:
-    enabled: true                    # Executor 未联网兜底打标
+    enabled: true
   tool_usage_audit:
-    enabled: true                    # Verifier 工具使用审计闸门
+    enabled: true
   synthesis_quality_check:
-    enabled: true                    # synthesis 步骤的深度质量校验闸门（verify_synthesis.md）
-                                     # 关闭后回退到默认 verify.md，不强制 should_replan
-                                     # 失败重试次数复用 reasoning.max_replans_per_step
-
-# nodes:                         # 可选：为特定 step 定义专属节点配置（以 step.id 为 key）
-#   search_web:                  # 匹配 step.id == "search_web" 的步骤
-#     type: team                 # auto（默认，由 step.is_simple 决定）| team | simple
-#     extra_skills:              # 在基础工具集上叠加的技能包名（对应 skills/ 目录下子目录名）
-#       - web_search
-#   write_report:
-#     type: simple
-#     extra_skills:
-#       - files
-#     executor_prompt: executor_synthesis  # 静态覆盖该节点的 executor prompt
-#                                          # 优先级高于 step.step_type 的命名约定路由
-
+    enabled: true
 tasks:
   daily_brief:
-    description: "每日简报：汇总今日未读邮件摘要、当天日历事件、待处理事项"
+    description: 每日简报：汇总今日未读邮件摘要、当天日历事件、待处理事项
     steps:
-      - "列出今天的未读邮件（最多 10 封），提取主题和发件人"
-      - "读取今天的日历事件"
-      - "生成简洁的日报摘要，包含邮件要点和日程安排"
-      - "将简报写入 workspace/memory/ 今日日志"
+    - 列出今天的未读邮件（最多 10 封），提取主题和发件人
+    - 读取今天的日历事件
+    - 生成简洁的日报摘要，包含邮件要点和日程安排
+    - 将简报写入 workspace/memory/ 今日日志

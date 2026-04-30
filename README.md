@@ -50,37 +50,38 @@ cd sunday
 uv sync
 ```
 
-### 2. 配置 API Key
+### 2. 互动初始化（推荐）
 
 ```bash
-cp .env.example .env
-# 编辑 .env，填入至少一个 API Key
+uv run sunday init
 ```
 
-`.env` 示例：
+`sunday init` 会引导：
+- **互动选 LLM provider**（anthropic / openai / deepseek / qwen / moonshot / ollama），自动改写 `configs/agent.yaml`
+- **`getpass` 隐藏输入 API KEY**，合并写入 `.env`（不破坏已有内容；`--no-key-prompt` 跳过让你后填）
+- **首次部署 seed**：把项目模板拷贝到 `~/.sunday/{workspace,memory}/`（已存在则跳过，幂等可重跑）
 
-```
-ANTHROPIC_API_KEY=sk-ant-...
-# 可选
-OPENAI_API_KEY=sk-...
-GOOGLE_API_KEY=AIza...
-# 网络搜索（可选）
-TAVILY_API_KEY=tvly-...
-# 配置目录（可选，默认自动定位到项目根目录下的 configs/）
-# SUNDAY_CONFIGS_DIR=/path/to/configs
-```
+完全幂等 —— 重复运行也安全，可用作"切换 provider"的入口。
 
-### 3. 验证安装
+> 也可以手动维护：编辑 `configs/agent.yaml` 选 provider，把对应 KEY 写到 `.env`。`init` 只是把这两步合并成互动引导。
+
+### 3. 验证环境
 
 ```bash
-uv run sunday --version   # 输出 0.1.0
-uv run sunday run "你好，介绍一下你自己"
+uv run sunday doctor   # 5 项健康检查（API KEY / 目录可写 / SOUL.md / 模板 diff / LLM ping）
+uv run sunday --version
+```
+
+`sunday doctor` 输出每项检查的 PASS / WARN / FAIL；FAIL 时返回退出码 1。常用：
+
+```bash
+uv run sunday doctor --skip-llm-ping   # 离线 / CI 场景跳过模型可达性检查
 ```
 
 ### 4. 启动 TUI（推荐）
 
 ```bash
-# 方式一：直接启动（自动连接 Service）
+# 方式一：直接启动（自动连接 Service；不在跑会自动 spawn）
 uv run sunday tui
 
 # 方式二：先启动 Service 守护进程，再启动 TUI
@@ -88,9 +89,21 @@ uv run sunday service start
 uv run sunday tui
 ```
 
+CLI 单任务模式（`sunday run "..."`）也是 Service 客户端 —— 检测 service 不在跑会**自动 spawn** 后台守护进程，无需手动 `service start`。
+
 ---
 
 ## CLI 用法
+
+### 部署与健康检查
+
+```bash
+uv run sunday init                       # 互动初始化（选 provider + 收 KEY + seed 模板，幂等）
+uv run sunday init --no-key-prompt       # 跳过 KEY 输入（用户后填 .env）
+
+uv run sunday doctor                     # 完整健康检查（含 LLM ping）
+uv run sunday doctor --skip-llm-ping     # 离线 / CI 场景跳过 LLM 可达性
+```
 
 ### 单次任务
 
@@ -100,9 +113,14 @@ uv run sunday run "帮我列出当前目录下所有 Python 文件"
 # 指定思考深度（off / minimal / low / medium / high）
 uv run sunday run "分析这段代码的性能问题" --thinking high
 
-# 临时切换模型
+# 临时切换模型（透传到 service 端，cfg.model_copy() 走完整 ReactAgent）
 uv run sunday run "翻译以下内容" --model openai/gpt-4o
+
+# 复用已有会话（多轮延续）
+uv run sunday run "请继续" --session abc12345
 ```
+
+> CLI 是 Service 客户端，`sunday run` 检测 service 不在跑会**自动 spawn** 后台守护进程。
 
 ### Service 管理
 
@@ -124,6 +142,13 @@ uv run sunday memory search "项目"        # 搜索记忆内容
 
 ```bash
 uv run sunday skills list     # 列出所有已发现的技能包
+```
+
+### 日志查看
+
+```bash
+uv run sunday logs service              # 查看 Service 守护进程日志
+uv run sunday logs service --follow     # tail -f 模式
 ```
 
 ---
@@ -249,6 +274,28 @@ author: your_name
 ## 能力
 - **do_something(param)**：做某件事
 ```
+
+---
+
+## 任务模式（task-mode）
+
+每个 step 必填 `step_type`（Pydantic Literal enum），用于路由到专项 prompt：
+
+| step_type | Executor prompt | Verifier prompt | 适用场景 |
+|-----------|-----------------|-----------------|---------|
+| `generic`（默认）| `executor_system.md` | `verify.md` | 无特殊任务模式，走通用提示 |
+| `research` | `executor_research.md` | `verify_research.md` | 调研、信息收集（联网） |
+| `analysis` | `executor_analysis.md` | `verify_analysis.md` | 对比、评分、推理 |
+| `synthesis` | `executor_synthesis.md` | `verify_synthesis.md` | 综合整合为最终交付物 |
+
+由 `src/sunday/agent/prompt_resolver.py` 单点解析（role × task_type 二维查找）。`generic` 是合法默认值（不是"忘填回退"）；指定专项 task_type 但 prompt 文件缺失时 **loud fail**（raise ValueError），避免静默降级。
+
+**加新 task-mode（如 `coding`）只需 3 步、0 行 Python 代码改动**（除 enum）：
+1. 在 `src/sunday/agent/models.py` 的 `StepType` Literal 加值
+2. 创建 `configs/prompts/executor_coding.md` + `verify_coding.md`
+3. 更新 `configs/prompts/plan.md` 的 step_type 清单说明
+
+完整指南：[`docs/extending-task-modes.md`](docs/extending-task-modes.md)。
 
 ---
 
@@ -395,6 +442,7 @@ reasoning:
   thinking_budget_tokens: 4096
 
 memory:
+  backend: local                     # local（默认，文件系统）| http（预留，未来远程 Memory 服务）
   consolidation_cron: "0 4 * * *"   # 整合定时规则（cron 语法）
   log_retention_days: 30             # 每日日志保留天数
   l0_max_lines: 100                  # 注入上下文的最大行数
@@ -419,7 +467,9 @@ tasks:
 
 ### 切换模型
 
-所有模型统一通过 OpenAI 兼容接口接入（Anthropic 原生接口仍支持）。修改 `configs/agent.yaml` 的 `model` 节，同时在 `.env` 中设置对应的 API key：
+最简单的方式：再跑一次 `sunday init` 选另一个 provider —— 它会自动改写 `agent.yaml` 的 model 节并合并 `.env`，幂等不破坏现有内容。
+
+如手动切换：修改 `configs/agent.yaml` 的 `model` 节，同时在 `.env` 中设置对应的 API key：
 
 ```yaml
 # Anthropic Claude（原生接口）
@@ -560,56 +610,59 @@ crontab -e
 
 ```
 sunday/
-├── .env.example               # 环境变量模板
+├── .env.example               # 环境变量模板（sunday init 自动生成 .env）
 ├── pyproject.toml             # 项目依赖（uv）
 ├── configs/
-│   ├── agent.yaml             # 主配置：模型、记忆、工具、任务
+│   ├── agent.yaml             # 主配置：模型、记忆、工具、任务（sunday init 改写 model 节）
 │   ├── mcp_servers.yaml       # MCP 服务器定义
-│   └── prompts/               # 系统提示文件
+│   ├── prompts/               # 系统提示文件（含 task-mode 矩阵 prompt）
+│   │   ├── plan.md            # 顶层规划
+│   │   ├── team_plan.md       # 子层规划
+│   │   ├── executor_system.md / executor_research.md / executor_analysis.md / executor_synthesis.md
+│   │   └── verify.md / verify_research.md / verify_analysis.md / verify_synthesis.md
+│   └── templates/             # 任务类型模板（auto-discovery yaml）
 ├── skills/                    # 技能包
-│   ├── files/                 # 文件操作
-│   ├── web_search/            # 网络搜索
-│   ├── code/                  # 代码执行
-│   ├── email/                 # Gmail
-│   └── calendar/              # Google 日历
-├── workspace/                 # 开发用工作区（生产在 ~/.sunday/workspace/）
+├── workspace/                 # 项目模板（sunday init 拷贝到 ~/.sunday/workspace/）
 │   ├── SOUL.md                # 身份与人格（用户可自定义）
 │   ├── AGENTS.md              # 操作规则
-│   ├── MEMORY.md              # 长期记忆模板
-│   ├── USER.md                # 用户画像模板
-│   ├── TOOLS.md               # 工具使用约定（注入 agent 上下文）
+│   ├── TOOLS.md               # 工具使用约定
+│   ├── RUNTIME_RULES.md       # 运行规则（关键词 / 阈值，可手编 + AI 学习追加）
+│   ├── MEMORY.md / USER.md    # 长期记忆 / 用户画像模板（首次部署 seed）
 │   └── tools/                 # 用户自定义工具（*.py，可选）
+├── docs/
+│   └── extending-task-modes.md  # 加新 task_type / role 的 3 步指南
 ├── scripts/
 │   ├── task_runner.py         # 定时任务运行器
 │   └── memory_consolidate.py  # 记忆整合脚本
 ├── src/sunday/
 │   ├── config.py              # 配置加载（Pydantic）
-│   ├── cli.py                 # CLI 入口（Click）
+│   ├── cli.py                 # CLI 入口（Click）—— 全部子命令注册
+│   ├── cli_init.py            # sunday init 互动初始化
+│   ├── cli_doctor.py          # sunday doctor 健康检查
+│   ├── bootstrap.py           # 工厂：build_memory_client / build_agent_loop / ensure_runtime_dirs
 │   ├── agent/                 # Agent 核心
 │   │   ├── react_agent.py     # 主循环（AgentLoop）
-│   │   ├── planner.py         # 规划器
-│   │   ├── verifier.py        # 验证器
+│   │   ├── planner.py / executor.py / verifier.py / team.py / simple.py
+│   │   ├── prompt_resolver.py # role × task_type 二维查找单点
 │   │   ├── llm_client.py      # 统一 LLM 调用（Anthropic + OpenAI 兼容）
-│   │   └── models.py          # 数据模型
-│   ├── memory/                # 记忆管理
-│   │   ├── manager.py
-│   │   ├── context.py
-│   │   └── janitor.py
+│   │   └── models.py          # 数据模型（含 StepType Literal enum）
+│   ├── memory/                # 记忆管理（黑盒接口）
+│   │   ├── client.py          # MemoryClient Protocol（sub-clients）
+│   │   ├── history.py         # extract_conversation / event_to_dict
+│   │   ├── consolidator.py / context.py / session_thread.py
+│   │   └── local/             # LocalMemoryClient 文件系统实现
 │   ├── tools/                 # 工具系统
-│   │   ├── registry.py
-│   │   ├── guard.py
-│   │   ├── cli_tool.py
+│   │   ├── registry.py / guard.py / cli_tool.py
 │   │   └── local_loader.py    # 用户自定义工具加载器
-│   ├── skills/
-│   │   └── loader.py
+│   ├── skills/loader.py
+│   ├── templates/loader.py    # 任务类型模板加载器
 │   ├── service/               # WebSocket 守护进程
-│   │   ├── server.py
-│   │   ├── session.py
-│   │   └── protocol.py
+│   │   ├── server.py          # SundayService（单一执行后端）
+│   │   ├── client.py          # ServiceClient（CLI / TUI 共用瘦客户端）
+│   │   ├── continuation.py / history.py removed → memory/history.py
+│   │   └── protocol.py        # EventType / Message
 │   └── tui/                   # 终端界面
-│       ├── app.py
-│       ├── commands.py
-│       └── widgets/
+│       ├── app.py / commands.py / widgets/
 └── tests/
     ├── unit/
     └── integration/

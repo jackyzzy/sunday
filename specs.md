@@ -446,3 +446,58 @@ tasks: {}                   # 定时任务定义
 - [Model Context Protocol](https://modelcontextprotocol.io)
 - [ReAct 论文](https://arxiv.org/abs/2210.03629)（Yao et al., 2023）
 - [Textual 文档](https://textual.textualize.io)
+
+---
+
+## 附录：v0.2 实施变更说明
+
+> 本节记录 v0.1 规格定稿（2026-03-26）后，工程实施阶段的关键架构调整。原规格章节保留为历史快照，本节作为差异说明。
+
+### 1. Gateway → Service 改名 + CLI 客户端化
+
+- **原 v0.1（§2.1）**：Gateway 是 WebSocket 网关；CLI 与 TUI 各自能 in-process 构造 Agent
+- **v0.2 调整**：
+  - 包目录 `gateway/` → `service/`、类 `Gateway` → `SundayService`、命令 `sunday gateway *` → `sunday service *`，**不留 alias**
+  - **CLI 重写为 Service 客户端**：[`src/sunday/service/client.py`](src/sunday/service/client.py) `ServiceClient` + `sunday run` 自动 spawn service；不再 in-process 构造 Agent
+  - **删除 SimpleAgent**（v0.1 Phase 1 遗留 chatbot 旁路）：`--model-override` 现走完整 ReactAgent，工具/记忆/计划/验证全可用
+  - **意义**：消除"两条独立执行路径"根因；TUI / CLI / 未来 Web 都是 Service 单一后端的客户端
+
+### 2. 首次部署：sunday init / sunday doctor
+
+- **原 v0.1（§3.1 F-02）**：`sunday gateway start/stop/status` + 用户手动 `cp .env.example .env`
+- **v0.2 新增**：
+  - `sunday init` —— 互动选 provider（anthropic/openai/deepseek/qwen/moonshot/ollama）+ `getpass` 收 KEY + 合并写 `.env` + 调 `MemoryClient.{workspace,knowledge}.ensure_seeded()` seed L0/L1 模板。**幂等可重跑**（用作切换 provider）
+  - `sunday doctor` —— 5 项健康检查（API KEY / 目录可写 / SOUL.md 非空 / 项目模板 vs 用户模板 unified diff / LLM ping）
+  - 实现位置：[`src/sunday/cli_init.py`](src/sunday/cli_init.py)、[`src/sunday/cli_doctor.py`](src/sunday/cli_doctor.py)
+
+### 3. Memory 黑盒接口（F-14 实施细化）
+
+- **原 v0.1（§3.3 F-14）**：`MemoryStore` Protocol 仅作为"未来规划"
+- **v0.2 落地**：
+  - 4 个 sub-client Protocol（`SessionsClient` / `KnowledgeClient` / `LogsClient` / `WorkspaceClient`）已就位（[`src/sunday/memory/client.py`](src/sunday/memory/client.py)）
+  - **`bootstrap.build_memory_client(cfg, *, mode)`** 按 `cfg.memory.backend` 派发：`local` 走 LocalMemoryClient；`http` 抛 `NotImplementedError`（预留远程 Memory 服务接入点）
+  - **agent 层零模板 IO 不变量**：原 `_ensure_user_dirs()` 用 `shutil.copy2` 直接复制模板的 leak 已删除，模板 seed 走 `WorkspaceClient.ensure_seeded(template_dir)` / `KnowledgeClient.ensure_seeded(template_dir)`
+  - **冷启动检查**：Service / ReactAgent 启动时 `assert_runtime_initialized(cfg)` 验证 SOUL.md 存在；缺失时报错提示 `sunday init`，不再自动补救
+  - **Janitor 按 mode**：`mode="service"` → True；其他 → False（CLI 单任务不启 6h TTL 后台任务）
+
+### 4. Task-mode prompt 路由（PromptResolver）
+
+- **原 v0.1**：未明确 prompt 矩阵
+- **v0.2 新增**（§3.2 F-05/F-07/F-08 实施细化）：
+  - `Step.step_type` 改为 `Literal["research","analysis","synthesis","generic"]` **必填 enum**
+  - [`src/sunday/agent/prompt_resolver.py`](src/sunday/agent/prompt_resolver.py) 单点解析 role × task_type：Executor + Verifier 各 4 个 prompt 全就位（`executor_*.md` / `verify_*.md`）
+  - **Loud fail 语义**：`generic` 是合法默认值；指定专项 task_type 但 prompt 文件缺失 → raise ValueError，不静默降级
+  - 加新 task-mode 见 [`docs/extending-task-modes.md`](docs/extending-task-modes.md)：3 步、0 行 Python 代码改动（除 enum）
+
+### 5. 其他实施细节
+
+- **turn_id 格式**：`t{index:03d}-{short_uuid_6}`（如 `t001-fd2fd8`），按字典序天然单调；由 [`memory.models.new_turn_id()`](src/sunday/memory/models.py) 单点生成
+- **Sub-step 实时性继承（§3.2 F-05b 强化）**：父 step `requires_realtime_data=True` → 子步骤代码层继承（`step_type=synthesis` 例外）；不再仅靠 prompt 提示
+- **Verifier 三层闸门显式短路**：basic fail → 跳过后续；subject fail → 跳过 audit；避免无谓 LLM 调用
+- **abort + resume 端到端测试**：`tests/integration/test_abort_resume.py` 覆盖"任务进行中 abort → 同 session '请继续' → continuation 重写 task → 衔接执行"完整链路
+
+### 6. 文档导航
+
+- 用户入口：[`README.md`](README.md)
+- AI 协作规则：[`CLAUDE.md`](CLAUDE.md)
+- 加新 task-mode：[`docs/extending-task-modes.md`](docs/extending-task-modes.md)
