@@ -18,7 +18,6 @@ Sunday Slash 命令：
   /new              开始新会话
   /reset            重置当前会话上下文
   /abort            中止当前运行任务
-  /copy             切换复制模式（与 Ctrl+Y 相同）
   /memory [file]    查看记忆文件 (SOUL/MEMORY/USER/TOOLS)
   /skills           列出可用技能
   /history          查看当前会话历史
@@ -26,12 +25,15 @@ Sunday Slash 命令：
   /trust            启用信任模式，危险操作自动确认（当前会话有效）
   /help             显示此帮助
 
-复制模式说明：
-  进入后终端接管鼠标，可拖拽选中文字（带高亮）。
-  WSL/Windows Terminal：右键 或 Ctrl+Shift+C 复制；或按 Ctrl+C 退出
-  Linux：Ctrl+Shift+C 复制；或按 Ctrl+C 自动将选区提升到剪贴板后退出
-  macOS：Cmd+C 复制；或按 Ctrl+C 退出
-  键盘滚动：↑/↓/PgUp/PgDn（进入复制模式时焦点已转到对话区）
+输入 / 复制粘贴：
+  Enter             发送当前消息
+  Ctrl+Enter        换行（首选；Shift+Enter / Alt+Enter 作为跨终端 fallback）
+  行尾 \\ + Enter    反斜杠续行（Claude Code 风格）
+  ↑ / ↓             历史回溯（光标在首/末行触发；当前 session 内）
+  Ctrl+C            复制全部对话内容到系统剪贴板
+  鼠标拖拽           终端原生选区高亮（终端默认行为）
+  右键 / Shift+Insert  终端原生粘贴
+  外部多行粘贴 >4 行时折叠为 [Pasted N lines #xxxxxx]，提交时还原原文
 """
 
 VALID_THINKING_LEVELS = {"off", "minimal", "low", "medium", "high"}
@@ -80,8 +82,6 @@ class SlashCommandHandler:
             return await self._cmd_delete(args)
         if cmd == "trust":
             return await self._cmd_trust()
-        if cmd == "copy":
-            return await self._cmd_copy()
         if cmd == "help":
             return HELP_TEXT
 
@@ -182,8 +182,3 @@ class SlashCommandHandler:
                       data={"command": "trust", "args": ""})
         await self._ws.send(msg.to_json())
         return "已启用信任模式，当前会话的危险操作将自动确认。"
-
-    async def _cmd_copy(self) -> None:
-        """切换复制模式（与 Ctrl+Y 相同）。"""
-        await self._app.action_toggle_copy_mode()
-        return None

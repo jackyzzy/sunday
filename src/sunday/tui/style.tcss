@@ -25,11 +25,11 @@ ChatLog {
 }
 
 StatusBar {
-    height: 1;
+    height: 2;
     dock: bottom;
 }
 
 InputBar {
-    height: 3;
+    height: 6;
     dock: bottom;
 }

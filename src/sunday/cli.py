@@ -59,9 +59,11 @@ def doctor(skip_llm_ping):
 @click.option("--port", default=7899, help="Service 端口")
 def tui(port):
     """启动交互式终端界面（默认模式）"""
+    from sunday.config import settings
     from sunday.tui.app import SundayApp
     app = SundayApp(service_url=f"ws://localhost:{port}", auto_connect=True)
-    app.run()
+    # mouse=False 让终端模拟器接管鼠标 → 拖拽=终端原生选区高亮、右键=终端原生菜单/粘贴
+    app.run(mouse=settings.sunday.tui.enable_mouse)
 
 
 @main.command()

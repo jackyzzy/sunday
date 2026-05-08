@@ -218,6 +218,27 @@ class QualityConfig(BaseModel):
     )
 
 
+class TuiConfig(BaseModel):
+    """终端 TUI 客户端配置。
+
+    所有项均可在 agent.yaml 的 `tui:` 节下覆盖；不写时取此默认值。
+    """
+
+    paste_fold_threshold: int = 4
+    """超过 N 行的粘贴折叠为 [Pasted N lines #xxxxxx] 占位符；提交时还原原文。"""
+
+    input_history_size: int = 200
+    """输入历史最大条数（per-session，从已有 turns 派生，不另起独立存储）。"""
+
+    enable_mouse: bool = False
+    """是否开启 Textual 鼠标捕获。
+
+    默认 False：让终端模拟器接管鼠标 → 拖拽=终端原生选区高亮、右键=终端原生菜单/粘贴。
+    Sunday TUI 全部 widget（ChatLog/StatusBar/Input）均无需鼠标点击交互，
+    禁用鼠标对功能零影响。仅在某些罕见终端 mouse=False 异常时改回 True。
+    """
+
+
 class NodeConfig(BaseModel):
     """单个执行节点的专属配置（可选，未配置则使用全局默认）。
 
@@ -266,6 +287,7 @@ class SundayConfig(BaseModel):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
+    tui: TuiConfig = Field(default_factory=TuiConfig)
     tasks: dict[str, TaskConfig] = Field(default_factory=dict)
     nodes: dict[str, NodeConfig] = Field(default_factory=dict)  # step.id → 节点专属配置
 

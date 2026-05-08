@@ -1,4 +1,4 @@
-"""StatusBar — 运行状态指示栏"""
+"""StatusBar — 运行状态指示栏 + 固定快捷键提示。"""
 from __future__ import annotations
 
 from textual.reactive import reactive
@@ -7,27 +7,47 @@ from textual.widgets import Label
 
 
 class StatusBar(Widget):
-    """显示当前运行状态：就绪 / 思考中 / 执行中 / 已中止 / 错误。"""
+    """两行状态栏：上半运行状态（思考/执行/就绪…），下半固定快捷键提示。"""
 
     DEFAULT_CSS = """
     StatusBar {
-        height: 1;
+        height: 2;
         background: $surface;
         color: $text;
         padding: 0 1;
+        layout: vertical;
+    }
+    StatusBar > #status-label {
+        height: 1;
+    }
+    StatusBar > #status-hint {
+        height: 1;
+        color: $text-muted;
     }
     """
 
     status_text: reactive[str] = reactive("● 就绪")
+    hint_text: reactive[str] = reactive("")
 
     def compose(self):
         yield Label(self.status_text, id="status-label")
+        yield Label(self.hint_text, id="status-hint")
 
     def watch_status_text(self, value: str) -> None:
         try:
             self.query_one("#status-label", Label).update(value)
         except Exception:
             pass
+
+    def watch_hint_text(self, value: str) -> None:
+        try:
+            self.query_one("#status-hint", Label).update(value)
+        except Exception:
+            pass
+
+    def set_hint(self, hint: str) -> None:
+        """设置底部固定快捷键提示行。"""
+        self.hint_text = hint
 
     def set_thinking(self) -> None:
         self.status_text = "● 思考中..."
@@ -46,12 +66,3 @@ class StatusBar(Widget):
 
     def set_error(self, msg: str = "") -> None:
         self.status_text = f"● 错误 {msg}".strip()
-
-    def set_copy_mode(self, active: bool, hint: str = "") -> None:
-        """切换复制模式状态栏显示。退出时恢复进入前的状态，而非强制写"就绪"。"""
-        if active:
-            self._prev_status = self.status_text
-            self.status_text = f"[COPY] {hint}" if hint else "[COPY] 拖拽选中 | Ctrl+C 退出"
-        else:
-            self.status_text = getattr(self, "_prev_status", "● 就绪") or "● 就绪"
-            self._prev_status = None

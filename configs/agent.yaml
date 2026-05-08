@@ -6,7 +6,8 @@ agent:
   log_dir: .sunday/logs
 model:
   provider: openai
-  id: deepseek-chat
+  # id: deepseek-chat
+  id: deepseek-v4-pro
   temperature: 0.2
   max_tokens: 8192
   base_url: https://api.deepseek.com/v1
@@ -64,6 +65,14 @@ quality:
     enabled: true
   synthesis_quality_check:
     enabled: true
+tui:
+  # 超过 N 行的粘贴折叠为 [Pasted N lines #xxxxxx] 占位符；提交时还原
+  paste_fold_threshold: 4
+  # 输入历史最大条数（per-session，从已有 turns 派生）
+  input_history_size: 200
+  # 是否启用 Textual 鼠标捕获。默认 false：让终端原生处理选区/右键。
+  # 需要拖拽选中文字、右键粘贴时保持 false；若某终端 mouse=false 异常可改 true
+  enable_mouse: false
 tasks:
   daily_brief:
     description: 每日简报：汇总今日未读邮件摘要、当天日历事件、待处理事项

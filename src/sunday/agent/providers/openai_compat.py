@@ -71,8 +71,15 @@ class OpenAICompatProvider:
         msg = choice["message"]
         raw_text = msg.get("content") or ""
 
-        # 剥离 DeepSeek / 通用 chain-of-thought 标签
-        thinking, text = split_thinking(raw_text)
+        # DeepSeek 思考模型（V4 / R1）的独立 reasoning_content 字段优先于 <think> 标签
+        # 该字段必须在后续 assistant 消息中回传，否则 DeepSeek 会 400：
+        # "The `reasoning_content` in the thinking mode must be passed back to the API."
+        reasoning = msg.get("reasoning_content") or None
+        if reasoning:
+            thinking = reasoning
+            text = raw_text
+        else:
+            thinking, text = split_thinking(raw_text)
 
         tool_call: ToolCall | None = None
         if msg.get("tool_calls"):
@@ -83,12 +90,13 @@ class OpenAICompatProvider:
                 arguments=tc["function"].get("arguments", "{}"),
             )
 
+        # raw_content 携带 reasoning_content，供 build_tool_result_messages 回传
         return LLMResponse(
             text=text,
             thinking=thinking,
             tool_call=tool_call,
             finish_reason=choice["finish_reason"],
-            raw_content=None,  # OpenAI 的 build_tool_result_messages 不需要原始 content
+            raw_content={"reasoning_content": reasoning} if reasoning else None,
         )
 
     def build_tool_result_messages(
@@ -98,17 +106,23 @@ class OpenAICompatProvider:
     ) -> list[dict]:
         assert response.tool_call is not None
         tc = response.tool_call
+        assistant_msg: dict = {
+            "role": "assistant",
+            # content 用 "" 而非 None：部分 provider（DeepSeek）拒绝 null content
+            "content": "",
+            "tool_calls": [{
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.name, "arguments": tc.arguments},
+            }],
+        }
+        # DeepSeek 思考模式：必须回传 reasoning_content，否则 400
+        if isinstance(response.raw_content, dict):
+            reasoning = response.raw_content.get("reasoning_content")
+            if reasoning:
+                assistant_msg["reasoning_content"] = reasoning
         return [
-            {
-                "role": "assistant",
-                # content 用 "" 而非 None：部分 provider（DeepSeek）拒绝 null content
-                "content": "",
-                "tool_calls": [{
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.name, "arguments": tc.arguments},
-                }],
-            },
+            assistant_msg,
             {
                 "role": "tool",
                 "tool_call_id": tc.id,
