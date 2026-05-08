@@ -159,44 +159,16 @@ uv run sunday logs service --follow     # tail -f 模式
 
 ### 基本对话
 
-直接在底部输入框输入任务，**Enter** 发送。Agent 会展示思考过程、执行步骤和最终结果。
+直接在底部输入框输入任务，回车发送。Agent 会展示思考过程、执行步骤和最终结果。
 
 ### 键盘快捷键
 
 | 快捷键 | 功能 |
 |--------|------|
-| `Enter` | 发送当前消息 |
-| `Ctrl+Enter` | 换行（首选；`Shift+Enter` / `Alt+Enter` 作为跨终端 fallback） |
-| 行尾 `\\` + `Enter` | 反斜杠续行（Claude Code 风格，不提交直接换行） |
-| `↑` / `↓` | 历史回溯（光标在首/末行触发，**当前 session 内**） |
-| `Ctrl+C` | 复制全部对话内容到系统剪贴板 |
 | `Ctrl+P` | 提示切换会话（输入 `/sessions` 查看列表） |
 | `Ctrl+L` | 提示切换模型（输入 `/model` 命令） |
 | `Ctrl+T` | 提示切换思考深度（输入 `/think` 命令） |
-| `Ctrl+Q` | 退出 TUI |
 | `Escape` | 中止当前运行中的任务 |
-
-### 复制粘贴
-
-Sunday TUI 默认禁用了 Textual 的鼠标捕获（`tui.enable_mouse: false`），把鼠标交给终端模拟器原生处理：
-
-| 操作 | 行为 |
-|------|------|
-| **鼠标拖拽** | 终端原生选中（带高亮反白），不需要进入特殊状态 |
-| **右键** / **Shift+Insert** | 终端原生粘贴菜单/直接粘贴 |
-| **Ctrl+Shift+C** / Cmd+C | 把选中文本复制到系统剪贴板（终端原生） |
-| **外部粘贴** | 多行内容直接粘贴进输入框；> 4 行时折叠为 `[Pasted N lines #xxxxxx]` 占位符，提交时自动还原原文 |
-
-**终端兼容矩阵**：
-
-| 终端 | 拖拽选区 | 右键粘贴 | Bracketed paste |
-|------|---------|---------|----------------|
-| Windows Terminal (WSL2 推荐) | ✅ 原生 | ✅ 原生 | ✅ |
-| iTerm2 (macOS) | ✅ | ✅ Cmd+V | ✅ |
-| Alacritty | ✅ Shift+拖拽 | ✅ | ✅ |
-| GNOME Terminal | ✅ | ✅ | ✅ |
-
-如某些罕见终端在 `mouse=false` 下行为异常，可在 `configs/agent.yaml` 中改 `tui.enable_mouse: true` 回到 Textual 鼠标捕获模式。
 
 ### Slash 命令
 

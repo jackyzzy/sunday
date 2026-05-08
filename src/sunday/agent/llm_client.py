@@ -1,11 +1,12 @@
 """共享 LLM 调用客户端 — 通过 Provider 注册表分发，消除 provider if/else。"""
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import httpx
 
-from sunday.agent.providers.base import LLMResponse
+from sunday.agent.providers.base import LLMAPIError, LLMResponse
 
 if TYPE_CHECKING:
     from sunday.config import ModelConfig
@@ -13,6 +14,19 @@ if TYPE_CHECKING:
 # 模块级连接池：复用 AsyncClient，避免每次调用重建 TCP/TLS 连接
 # 延迟初始化，便于测试通过 patch("sunday.agent.llm_client._get_http_client", ...) 替换
 _HTTP_CLIENT: httpx.AsyncClient | None = None
+
+
+def _raise_api_error(provider: str, resp: httpx.Response) -> None:
+    """解析 API 错误响应，抛出包含原始错误消息的 LLMAPIError。
+
+    兼容 OpenAI / DeepSeek / Anthropic 共同使用的 {"error": {"message": "..."}} 格式。
+    """
+    try:
+        body = json.loads(resp.text)
+        msg = (body.get("error") or {}).get("message") or str(body)
+    except Exception:
+        msg = resp.text[:500]
+    raise LLMAPIError(f"[{provider}] HTTP {resp.status_code}: {msg}")
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -76,8 +90,7 @@ class LLMClient:
             request.url, headers=request.headers, json=request.body, timeout=timeout
         )
         if not resp.is_success:
-            _logger.error("LLM API %d 错误，响应体：%s", resp.status_code, resp.text[:500])
-        resp.raise_for_status()
+            _raise_api_error(model_cfg.provider, resp)
         return provider.parse_response(resp.json())
 
     @staticmethod

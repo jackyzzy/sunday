@@ -4,6 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+
+class LLMAPIError(RuntimeError):
+    """LLM API 调用失败，包含服务商返回的原始错误消息。"""
+
 if TYPE_CHECKING:
     from sunday.config import ModelConfig
 

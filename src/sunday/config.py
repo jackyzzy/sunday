@@ -15,26 +15,14 @@ from pydantic_settings import BaseSettings
 load_dotenv(override=False)
 
 
-_PROVIDER_ENV_MAP = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "google": "GOOGLE_API_KEY",
-}
-
-
 def _lookup_api_key(provider: str, api_key_env: str | None) -> str:
     """从 os.environ 查找 API key，找不到时抛出 ValueError。"""
-    if api_key_env:
-        key = os.environ.get(api_key_env, "")
-        if not key:
-            raise ValueError(f"环境变量 '{api_key_env}' 未设置，请在 .env 中配置")
-        return key
-    env_var = _PROVIDER_ENV_MAP.get(provider, f"{provider.upper()}_API_KEY")
+    env_var = api_key_env or f"{provider.upper()}_API_KEY"
     key = os.environ.get(env_var, "")
     if not key:
         raise ValueError(
             f"未找到 provider '{provider}' 的 API key，"
-            f"请在 .env 中设置或在 agent.yaml 中配置 model.api_key_env"
+            f"请在 .env 中设置 {env_var}，或在 agent.yaml 中配置 model.api_key_env"
         )
     return key
 
@@ -63,7 +51,8 @@ class ModelConfig(BaseModel):
     temperature: float = 0.2
     max_tokens: int = 8192
     base_url: str | None = None
-    api_key_env: str | None = None  # 指定从哪个环境变量读取 API key，优先于 provider 默认映射
+    api_key_env: str | None = None   # 覆盖默认 key 查找（默认用 {PROVIDER}_API_KEY）
+    api_version: str | None = None   # 覆盖 provider API 版本号（当前仅 Anthropic 使用）
 
     def get_api_key(self) -> str:
         """从环境变量读取 API key，无需 Settings 对象。"""
@@ -314,10 +303,9 @@ class SundayConfig(BaseModel):
 class Settings(BaseSettings):
     """应用级别设置，从 .env 读取密钥，从 YAML 读取配置"""
 
-    # 环境变量中的 API keys
+    # 环境变量中的 API keys（由 pydantic-settings 自动从 .env 读取）
     anthropic_api_key: str = ""
     openai_api_key: str = ""
-    google_api_key: str = ""
 
     # 日志级别
     sunday_log_level: str = "INFO"

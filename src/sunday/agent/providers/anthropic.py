@@ -38,7 +38,7 @@ class AnthropicProvider:
         endpoint = model_cfg.base_url or _DEFAULT_ENDPOINT
         headers = {
             "x-api-key": api_key,
-            "anthropic-version": _ANTHROPIC_VERSION,
+            "anthropic-version": model_cfg.api_version or _ANTHROPIC_VERSION,
             "content-type": "application/json",
         }
         body: dict = {

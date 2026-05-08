@@ -6,7 +6,6 @@ agent:
   log_dir: .sunday/logs
 model:
   provider: openai
-  # id: deepseek-chat
   id: deepseek-v4-pro
   temperature: 0.2
   max_tokens: 8192

@@ -191,7 +191,20 @@ class Planner:
             thinking_budget=budget,
         )
 
-        plan = self._parse_plan(response.text, thinking=response.thinking)
+        try:
+            plan = self._parse_plan(response.text, thinking=response.thinking)
+        except ValueError as _parse_err:
+            # DeepSeek 偶尔输出缺逗号等格式错误的 JSON，让模型自修正后重试一次
+            logger.warning("规划 JSON 解析失败（%s），发回模型修正后重试", _parse_err)
+            fix_resp = await LLMClient.call(
+                model_cfg,
+                messages=[{"role": "user", "content":
+                    f"以下 JSON 格式有误，请修正并只返回合法 JSON（不要有任何额外文字或代码块）：\n\n{response.text[:3000]}"}],
+                max_tokens=model_cfg.max_tokens,
+                temperature=0,
+                thinking_budget=0,
+            )
+            plan = self._parse_plan(fix_resp.text, thinking=response.thinking)
 
         # 模板驱动：根据 task_type 模板的 synthesis 配置注入综合整合步骤
         self._maybe_inject_synthesis_step(plan)
