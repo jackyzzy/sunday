@@ -92,7 +92,7 @@ class Executor:
         from sunday.agent.providers import get_provider
 
         model_cfg: ModelConfig = self.config.model
-        max_steps = self.config.reasoning.max_react_iteration
+        max_steps = self.config.reasoning.max_react_iterations_per_substep
         provider = get_provider(model_cfg.provider)
 
         system = self._get_system_prompt(step.step_type).format(
@@ -151,8 +151,25 @@ class Executor:
             try:
                 arguments = json.loads(tc.arguments) if tc.arguments else {}
             except json.JSONDecodeError:
-                logger.warning("工具 %s 参数 JSON 解析失败，使用空参数。原文：%s", tc.name, tc.arguments[:200])
-                arguments = {}
+                # JSON 截断时不静默降级——给模型明确的错误观察值，让它知道要拆分内容
+                logger.warning(
+                    "工具 %s 参数 JSON 解析失败（内容可能因 max_tokens 截断）。原文前 300 字：%s",
+                    tc.name, tc.arguments[:300],
+                )
+                observation = (
+                    f"[工具参数 JSON 解析失败] 调用 {tc.name!r} 时参数 JSON 格式不完整，"
+                    f"可能因输出超出 max_tokens 被截断。"
+                    f"请将文件内容拆分为多次调用：先用 write_file 写少量内容，再用 append_file 追加剩余部分；"
+                    f"每次写入不超过 1500 字。"
+                )
+                iterations.append(ReactIteration(
+                    iteration=i,
+                    tool_name=tc.name,
+                    tool_input={},
+                    observation=observation,
+                ))
+                messages.extend(provider.build_tool_result_messages(response, observation))
+                continue
 
             if self.tool_registry:
                 observation = await self.tool_registry.execute(

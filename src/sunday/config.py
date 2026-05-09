@@ -49,7 +49,7 @@ class ModelConfig(BaseModel):
     provider: str = "anthropic"
     id: str = "claude-opus-4-5"
     temperature: float = 0.2
-    max_tokens: int = 8192
+    max_tokens: int = 16384
     base_url: str | None = None
     api_key_env: str | None = None   # 覆盖默认 key 查找（默认用 {PROVIDER}_API_KEY）
     api_version: str | None = None   # 覆盖 provider API 版本号（当前仅 Anthropic 使用）
@@ -62,10 +62,16 @@ class ModelConfig(BaseModel):
 class ReasoningConfig(BaseModel):
     """推理与思考配置"""
 
-    max_steps: int = 20                # 任务顶层步骤数上限（超出则截断）
-    max_react_iteration: int = 40      # 单步内 ReAct 工具调用轮次上限
-    max_replans_per_step: int = 10     # Team 内层子步骤重规划上限
-    max_replans: int = 40              # 整任务外层重规划总上限（外层唯一限制）
+    # 顶层步骤数上限（Planner 产出 > 此值则截断，react_agent.py:151）
+    max_steps: int = 20
+    # Team 内 sub-step 数上限（Team 子规划产出 > 此值则截断，team.py 内执行）
+    max_steps_per_step: int = 3
+    # 单 sub-step 内 ReAct 工具调用轮次上限（>15 会显著膨胀上下文）
+    max_react_iterations_per_substep: int = 15
+    # Team 内层 sub-plan 重规划上限（每次都跑完整 ReAct，过高会爆调用数）
+    max_replans_per_step: int = 3
+    # 全局外层重规划总上限（跨所有 top-level step 累加）
+    max_replans: int = 3
     thinking_level: str = "medium"     # off | minimal | low | medium | high
 
 
@@ -85,7 +91,7 @@ class ToolsConfig(BaseModel):
     """工具执行配置"""
 
     default_timeout: int = 60
-    max_output_chars: int = 8192
+    max_output_chars: int = 8000  # 单次工具结果上限，避免 ReAct 多轮后消息历史膨胀
     sandbox_mode: bool = True
     allow_list: list[str] = Field(default_factory=list)
     deny_list: list[str] = Field(default_factory=lambda: ["rm -rf", "dd if="])

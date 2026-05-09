@@ -18,7 +18,7 @@ def _make_config(tmp_path):
     config_file = tmp_path / "agent.yaml"
     config_file.write_text(yaml.dump({
         "model": {"provider": "openai", "id": "test-model", "api_key_env": "FAKE_KEY"},
-        "reasoning": {"max_react_iteration": 5, "max_replans_per_step": 1,
+        "reasoning": {"max_react_iterations_per_substep": 5, "max_replans_per_step": 1,
                       "max_replans": 5},
     }))
     with patch.dict(os.environ, {"FAKE_KEY": "sk-fake", "SUNDAY_CONFIGS_DIR": str(tmp_path)}):

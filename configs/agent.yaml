@@ -8,14 +8,22 @@ model:
   provider: openai
   id: deepseek-v4-pro
   temperature: 0.2
-  max_tokens: 8192
+  # DeepSeek-V4 Pro thinking 模式下 reasoning_content + content 共用 max_tokens；
+  # 8192 装不下完整中文长报告 → tool_call JSON 截断。16384 覆盖大部分长文场景。
+  max_tokens: 16384
   base_url: https://api.deepseek.com/v1
   api_key_env: DEEPSEEK_API_KEY
 reasoning:
+  # 顶层 step 数上限：Planner 一次产出超过则截断（react_agent.py 处理）
   max_steps: 20
-  max_react_iteration: 40
-  max_replans_per_step: 10
-  max_replans: 40
+  # Team 内 sub-step 数上限：Team 子规划超过则截断（team.py 处理）
+  max_steps_per_step: 3
+  # 单 sub-step 内 ReAct 工具调用轮次上限：>15 会显著膨胀上下文
+  max_react_iterations_per_substep: 15
+  # Team 内 sub-plan 重规划上限：每次都跑完整 ReAct（~30 调用），3 次足以处理偶发失败
+  max_replans_per_step: 3
+  # 全局外层重规划总上限：跨所有 top-level step 累加，10 次合理
+  max_replans: 3
   thinking_level: medium
 memory:
   consolidation_cron: 0 4 * * *
@@ -24,7 +32,9 @@ memory:
   history_max_chars: 2000
 tools:
   default_timeout: 60
-  max_output_chars: 20480
+  # 单次工具结果上限：每轮 ReAct 都会附加到消息历史。20480 在 10 轮后 → ~200k 字符上下文，
+  # DeepSeek 处理 100k+ 上下文显著变慢。8000 在保留可用性的同时控制膨胀。
+  max_output_chars: 8000
   sandbox_mode: true
   allow_list: []
   deny_list:

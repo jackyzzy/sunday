@@ -84,6 +84,15 @@ class Team:
                         step.id, sub.id,
                     )
                     sub.requires_realtime_data = True
+        # Sub-step 数上限：Planner 偶尔过度拆解（5+ 个 sub-step），
+        # 截断保护避免单 step 内调用数失控（每多一个 sub-step ≈ 一次完整 ReAct 循环）
+        max_substeps = self.planner.config.reasoning.max_steps_per_step
+        if len(sub_plan.steps) > max_substeps:
+            logger.warning(
+                "Team %s 子步骤数 %d 超过上限 %d，已截断",
+                step.id, len(sub_plan.steps), max_substeps,
+            )
+            sub_plan.steps = sub_plan.steps[:max_substeps]
         logger.debug("Team %s 子规划完成，共 %d 个子步骤", step.id, len(sub_plan.steps))
 
         # 串行执行子步骤（支持内层重规划）

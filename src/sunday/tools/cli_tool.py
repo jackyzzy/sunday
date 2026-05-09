@@ -120,6 +120,16 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
         registry.add_written_file(p.name)
         return f"已写入：{p}"
 
+    async def _append_file(path: str, content: str) -> str:
+        p = Path(path)
+        if not p.is_absolute() and getattr(registry, "_report_dir", None):
+            p = registry._report_dir / p
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(content)
+        registry.add_written_file(p.name)
+        return f"已追加至：{p}"
+
     async def _run_shell(command: str, timeout: int = 30) -> str:
         import os as _os
         report_dir_val = str(getattr(registry, "_report_dir", None) or "")
@@ -199,6 +209,27 @@ def register_cli_tools(registry: "ToolRegistry") -> None:
                 timeout=10,
             ),
             _write_file,
+        ),
+        (
+            ToolMeta(
+                name="append_file",
+                description=(
+                    "追加内容到文件末尾（不覆盖已有内容）。相对路径自动保存至当前任务报告目录。\n"
+                    "适用场景：文件内容过长无法在单次 write_file 调用中写完时，先用 write_file 写入开头部分，"
+                    "再用 append_file 追加剩余内容。每次追加建议不超过 1500 字。"
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "文件路径（只需文件名即可，如 report.md）"},
+                        "content": {"type": "string", "description": "要追加的内容"},
+                    },
+                    "required": ["path", "content"],
+                },
+                is_dangerous=False,
+                timeout=10,
+            ),
+            _append_file,
         ),
         (
             ToolMeta(
