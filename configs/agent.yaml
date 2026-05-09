@@ -15,7 +15,7 @@ model:
   api_key_env: DEEPSEEK_API_KEY
 reasoning:
   # 顶层 step 数上限：Planner 一次产出超过则截断（react_agent.py 处理）
-  max_steps: 20
+  max_steps: 10
   # Team 内 sub-step 数上限：Team 子规划超过则截断（team.py 处理）
   max_steps_per_step: 3
   # 单 sub-step 内 ReAct 工具调用轮次上限：>15 会显著膨胀上下文
