@@ -280,9 +280,15 @@ class ReactAgent:
 
             verify_reason = ""
             if team_result.sub_steps:
-                failing = [s for s in team_result.sub_steps if not s.verified]
-                src = failing[-1] if failing else team_result.sub_steps[-1]
-                verify_reason = src.verify_reason or ""
+                if team_result.passed:
+                    # 成功路径：取最后一个 sub-step；若它本身就是 passed，用它的 reason；
+                    # 否则（罕见：最后一个反而失败但整体被外部判 passed）留空
+                    last = team_result.sub_steps[-1]
+                    verify_reason = last.verify_reason if last.verified else ""
+                else:
+                    failing = [s for s in team_result.sub_steps if not s.verified]
+                    if failing:
+                        verify_reason = failing[-1].verify_reason or ""
 
             duration_ms = round(
                 (datetime.now(timezone.utc) - step_start_ts).total_seconds() * 1000

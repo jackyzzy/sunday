@@ -320,10 +320,20 @@ class Planner:
         return clean
 
     async def replan(self, failed_step: Step, result_output: str, state: AgentState) -> list[Step]:
-        """局部重规划：替换 failed_step 之后所有未执行步骤。"""
+        """局部重规划：替换 failed_step 之后所有未执行步骤。
+
+        三段式 dep-safe 流程（避免下游被秒级 SKIPPED 雪崩）：
+        1. 严格校验 LLM 输出 — depends_on 只能引用 completed_step_ids 或新步骤 ID
+        2. 校验失败 → 带错误反馈重试 LLM 1 次
+        3. 仍非法 → 降级宽容清理（剔除非法 deps，必要时把首步重映射到最后一个 completed）
+
+        额外：若原 plan 末尾有 step_final_synthesis 但 replan 输出未含 synthesis 步骤，
+        复用 _maybe_inject_synthesis_step 兜底补注入。
+        """
         model_cfg: ModelConfig = self.config.model
 
         completed = [tr for tr in state.team_results if tr.passed]
+        completed_ids = [tr.step_id for tr in completed]
         completed_summary = "; ".join(f"{tr.step_id}: {tr.output[:150]}" for tr in completed)
 
         remaining = []
@@ -338,29 +348,127 @@ class Planner:
             failed_step_intent=failed_step.intent,
             reason=result_output[:500],
             completed_summary=completed_summary or "无",
+            completed_step_ids=json.dumps(completed_ids, ensure_ascii=False) or "[]",
             goal=state.plan.goal if state.plan else state.task,
             remaining_steps=json.dumps(remaining, ensure_ascii=False),
         )
 
-        raw = await LLMClient.call_text(
-            model_cfg, prompt, max_tokens=4096, temperature=0.3
+        # 第一道：严格校验
+        raw = await LLMClient.call_text(model_cfg, prompt, max_tokens=4096, temperature=0.3)
+        new_steps = self._parse_replan_steps(raw, failed_step)
+        invalid = self._find_invalid_deps(new_steps, completed_ids)
+
+        if invalid and new_steps:
+            # 第二道：带错误反馈重试 LLM 一次
+            retry_prompt = self._build_replan_retry_prompt(prompt, raw, invalid)
+            raw2 = await LLMClient.call_text(model_cfg, retry_prompt, max_tokens=4096, temperature=0.3)
+            new_steps_retry = self._parse_replan_steps(raw2, failed_step)
+            invalid2 = self._find_invalid_deps(new_steps_retry, completed_ids)
+            if not invalid2:
+                new_steps = new_steps_retry
+            else:
+                # 第三道：降级宽容清理
+                logger.warning("replan LLM 重试后仍含非法依赖 %s，降级清理", invalid2)
+                new_steps = self._sanitize_replan_deps(new_steps_retry, completed_ids)
+
+        # Bug #2：补注入 synthesis（若原 plan 末尾有 step_final_synthesis 但新 plan 无）
+        new_steps = self._maybe_reinject_synthesis_on_replan(new_steps, state)
+
+        return new_steps
+
+    @staticmethod
+    def _find_invalid_deps(
+        new_steps: list[Step], completed_ids: list[str]
+    ) -> dict[str, list[str]]:
+        """返回 {step_id: [invalid_dep, ...]}，空字典表示全部合法。
+
+        合法依赖集合 = set(completed_ids) ∪ {新步骤 ID}。
+        """
+        valid = set(completed_ids) | {s.id for s in new_steps}
+        invalid: dict[str, list[str]] = {}
+        for s in new_steps:
+            bad = [d for d in s.depends_on if d not in valid]
+            if bad:
+                invalid[s.id] = bad
+        return invalid
+
+    @staticmethod
+    def _build_replan_retry_prompt(
+        orig_prompt: str, bad_response: str, invalid: dict[str, list[str]]
+    ) -> str:
+        """构造带错误反馈的重试 prompt，逼 LLM 修正依赖引用。"""
+        invalid_desc = "; ".join(f"{sid} 引用了非法 ID {bad}" for sid, bad in invalid.items())
+        return (
+            f"{orig_prompt}\n\n"
+            f"---\n上一次输出违反了依赖约束：{invalid_desc}\n"
+            f"上一次响应（仅供参考）：{bad_response[:500]}\n\n"
+            f"请重新输出，确保每个 step 的 depends_on 只引用 completed_step_ids "
+            f"或本次新生成步骤的 id，不要引用任何其他 ID。"
         )
+
+    @staticmethod
+    def _sanitize_replan_deps(
+        new_steps: list[Step], completed_ids: list[str]
+    ) -> list[Step]:
+        """降级清理（最后一道防线）：
+
+        - 剔除每个步骤 depends_on 中的非法 ID
+        - 若清理后首个新步骤 depends_on 完全为空且 completed_ids 非空，
+          强制重映射到 completed_ids[-1]，保证可执行
+        """
+        valid_ids = set(completed_ids) | {s.id for s in new_steps}
+        for s in new_steps:
+            s.depends_on = [d for d in s.depends_on if d in valid_ids]
+        if new_steps and not new_steps[0].depends_on and completed_ids:
+            new_steps[0].depends_on = [completed_ids[-1]]
+        return new_steps
+
+    def _parse_replan_steps(self, raw: str, failed_step: Step) -> list[Step]:
+        """解析 LLM 响应为 Step 列表 + 继承失败步骤的 step_type。"""
         plan_text = strip_code_fence(raw)
         if not plan_text:
-            logger.warning("replan LLM 响应为空，将返回空步骤列表")
+            logger.warning("replan LLM 响应为空")
             return []
         try:
             data = json.loads(plan_text)
         except json.JSONDecodeError as e:
-            logger.warning("replan 响应 JSON 解析失败（%s），返回空步骤列表。原文：%s", e, plan_text[:200])
+            logger.warning("replan 响应 JSON 解析失败（%s）。原文：%s", e, plan_text[:200])
             return []
         new_steps = [Step(**s) for s in data.get("steps", [])]
-        # 继承失败步骤的 step_type：若 replan LLM 未显式声明（落入默认 "generic"）
-        # 但原失败步骤是专项类型，保留专项 prompt 路由；否则尊重 LLM 输出
+        # 继承失败步骤的 step_type：若 LLM 未显式声明（落入默认 "generic"）
+        # 但原失败步骤是专项类型，保留专项 prompt 路由
         for s in new_steps:
             if s.step_type == "generic" and failed_step.step_type != "generic":
                 s.step_type = failed_step.step_type
         return new_steps
+
+    def _maybe_reinject_synthesis_on_replan(
+        self, new_steps: list[Step], state: AgentState
+    ) -> list[Step]:
+        """若原 plan 末尾有 step_final_synthesis 但新步骤未含 synthesis，复用注入逻辑补回。
+
+        前提：state.plan.task_type 在模板表中且 synthesis.enabled=true。
+        若条件不满足（如无 templates、无 task_type）则保持原样。
+        """
+        if not state.plan:
+            return new_steps
+        has_original_synthesis = any(
+            s.id == "step_final_synthesis" for s in state.plan.steps
+        )
+        if not has_original_synthesis:
+            return new_steps
+        if any(s.step_type == "synthesis" for s in new_steps):
+            return new_steps
+
+        # 借 _maybe_inject_synthesis_step 在临时 Plan 上工作，保持注入语义一致
+        temp_plan = Plan(
+            goal=state.plan.goal,
+            task_type=state.plan.task_type,
+            synthesis_document_name=state.plan.synthesis_document_name,
+            steps=list(new_steps),
+        )
+        self._maybe_inject_synthesis_step(temp_plan)
+        return temp_plan.steps
 
     async def sub_replan(
         self,
