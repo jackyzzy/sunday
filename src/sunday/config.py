@@ -225,14 +225,6 @@ class TuiConfig(BaseModel):
     input_history_size: int = 200
     """输入历史最大条数（per-session，从已有 turns 派生，不另起独立存储）。"""
 
-    enable_mouse: bool = False
-    """是否开启 Textual 鼠标捕获。
-
-    默认 False：让终端模拟器接管鼠标 → 拖拽=终端原生选区高亮、右键=终端原生菜单/粘贴。
-    Sunday TUI 全部 widget（ChatLog/StatusBar/Input）均无需鼠标点击交互，
-    禁用鼠标对功能零影响。仅在某些罕见终端 mouse=False 异常时改回 True。
-    """
-
 
 class NodeConfig(BaseModel):
     """单个执行节点的专属配置（可选，未配置则使用全局默认）。

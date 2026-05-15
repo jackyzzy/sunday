@@ -1,4 +1,4 @@
-"""InputHistory — TUI 输入框历史回溯（per-session，从 turns payload 派生）。
+"""InputHistory — TUI 输入历史回溯（per-session，从 turns payload 派生）。
 
 核心思想：history 不引入新存储，而是从 Service 通过 `/history` slash 命令返回的
 turns 数组中提取 user_input 字段重建。新提交的 query 同步进入内存栈，agent loop
@@ -44,13 +44,7 @@ class InputHistory:
         self._buf.clear()
 
     def load_from_turns(self, turns: list[dict]) -> None:
-        """切到目标 session 时调用：清空内存栈 → 从 turns 重建。
-
-        turns 是 SLASH_RESULT cmd=history 返回的 turns 数组中的一项；
-        每项至少含 user_input 字段（其它字段如 turn_index 等忽略）。
-        相邻重复 user_input 去重；空字符串/None/缺失字段跳过。
-        deque 的 maxlen 自动保证只留最近 maxlen 条。
-        """
+        """切到目标 session 时调用：清空内存栈 → 从 turns 重建。"""
         self._buf.clear()
         for t in turns:
             text = t.get("user_input") if isinstance(t, dict) else None

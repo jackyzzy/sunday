@@ -1,21 +1,20 @@
-"""TUI 输入组件测试：InputHistory + PromptTextArea。
+"""TUI 输入逻辑测试：InputHistory + PasteFolder。
 
-覆盖 plan「Sunday TUI 复制粘贴 / 多行输入 / 历史回溯 彻底改造方案」
-中的核心契约：
-- InputHistory：相邻去重、maxlen 截断、load_from_turns 切 session
-- PromptTextArea：Enter=提交、Ctrl+Enter=换行、反斜杠续行、>4 行粘贴折叠为占位符
+InputHistory：相邻去重、maxlen 截断、load_from_turns 切 session。
+PasteFolder：>threshold 行折叠为 [Pasted N lines #xxxxxx] 占位符，提交时还原。
 """
 from __future__ import annotations
 
-import pytest
+import re
+
 
 # ──────────────────────────────────────────────────────────────────────────────
-# InputHistory（纯逻辑，无 Textual 依赖）
+# InputHistory（纯逻辑）
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_input_history_append_basic():
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     h = InputHistory()
     h.append("alpha")
@@ -27,7 +26,7 @@ def test_input_history_append_basic():
 
 def test_input_history_append_dedup_consecutive():
     """相邻重复不入栈（连续敲两次同样的 query 只存一份）。"""
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     h = InputHistory()
     h.append("hello")
@@ -40,7 +39,7 @@ def test_input_history_append_dedup_consecutive():
 
 def test_input_history_maxlen_truncates_old():
     """超过 maxlen 后旧条目被 deque 自动丢弃。"""
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     h = InputHistory(maxlen=3)
     for q in ["a", "b", "c", "d", "e"]:
@@ -50,7 +49,7 @@ def test_input_history_maxlen_truncates_old():
 
 
 def test_input_history_load_from_turns_extracts_user_input():
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     h = InputHistory()
     h.load_from_turns([
@@ -62,7 +61,7 @@ def test_input_history_load_from_turns_extracts_user_input():
 
 def test_input_history_load_from_turns_clears_old():
     """从 session A 切到 B，A 的历史不污染 B。"""
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     h = InputHistory()
     h.load_from_turns([{"user_input": "from_A_1"}, {"user_input": "from_A_2"}])
@@ -71,7 +70,7 @@ def test_input_history_load_from_turns_clears_old():
 
 
 def test_input_history_load_from_turns_dedup_consecutive():
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     h = InputHistory()
     h.load_from_turns([
@@ -85,7 +84,7 @@ def test_input_history_load_from_turns_dedup_consecutive():
 
 def test_input_history_load_from_turns_skips_empty():
     """空字符串、None、缺失字段都跳过。"""
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     h = InputHistory()
     h.load_from_turns([
@@ -99,7 +98,7 @@ def test_input_history_load_from_turns_skips_empty():
 
 def test_input_history_load_from_turns_respects_maxlen():
     """加载超过 maxlen 的 turns 时只保留最近 maxlen 条。"""
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     h = InputHistory(maxlen=2)
     h.load_from_turns([
@@ -111,7 +110,7 @@ def test_input_history_load_from_turns_respects_maxlen():
 
 
 def test_input_history_clear():
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     h = InputHistory()
     h.append("x")
@@ -122,7 +121,7 @@ def test_input_history_clear():
 
 def test_input_history_no_persistence_between_instances():
     """新建两个 InputHistory 实例彼此独立（验证不持久化）。"""
-    from sunday.tui.widgets.input_history import InputHistory
+    from sunday.tui.input_history import InputHistory
 
     a = InputHistory()
     a.append("private")
@@ -131,179 +130,67 @@ def test_input_history_no_persistence_between_instances():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PromptTextArea（依赖 Textual Pilot 模拟键盘）
+# PasteFolder（纯逻辑，替代旧 PromptTextArea 粘贴折叠测试）
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture
-def make_app():
-    """构造一个最小 Textual App 把 PromptTextArea 挂进去用。"""
-    from textual.app import App, ComposeResult
+def test_paste_folder_below_threshold_passes_through():
+    """<=4 行原样返回，不折叠。"""
+    from sunday.tui.cli import PasteFolder
 
-    from sunday.tui.widgets.input_history import InputHistory
-    from sunday.tui.widgets.prompt_textarea import PromptTextArea
-
-    class _Host(App):
-        def __init__(self, history=None, fold_threshold=4):
-            super().__init__()
-            self.history = history or InputHistory()
-            self.fold_threshold = fold_threshold
-            self.submitted: list[str] = []
-
-        def compose(self) -> ComposeResult:
-            yield PromptTextArea(
-                history=self.history,
-                paste_fold_threshold=self.fold_threshold,
-                id="pta",
-            )
-
-        def on_prompt_text_area_submitted(self, event) -> None:
-            self.submitted.append(event.value)
-
-    return _Host
+    pf = PasteFolder(threshold=4)
+    text = "a\nb\nc"
+    assert pf.maybe_fold(text) == text
 
 
-async def test_enter_submits(make_app):
-    """裸 Enter 应触发提交，输入框清空。"""
-    app = make_app()
-    async with app.run_test(headless=True) as pilot:
-        ta = pilot.app.query_one("#pta")
-        ta.text = "你好"
-        ta.focus()
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-        assert pilot.app.submitted == ["你好"]
-        assert ta.text == ""
+def test_paste_folder_above_threshold_creates_placeholder():
+    """>4 行折叠为 [Pasted N lines #xxxxxx]，N 是原始行数。"""
+    from sunday.tui.cli import PasteFolder
+
+    pf = PasteFolder(threshold=4)
+    text = "L1\nL2\nL3\nL4\nL5\nL6"  # 6 lines
+    placeholder = pf.maybe_fold(text)
+    m = re.fullmatch(r"\[Pasted 6 lines #([0-9a-f]{6})\]", placeholder)
+    assert m is not None
 
 
-async def test_ctrl_enter_inserts_newline(make_app):
-    """Ctrl+Enter 不提交，插入换行。"""
-    app = make_app()
-    async with app.run_test(headless=True) as pilot:
-        ta = pilot.app.query_one("#pta")
-        ta.text = "hello"
-        ta.focus()
-        # 把光标移到末尾
-        ta.move_cursor(ta.document.end)
-        await pilot.pause()
-        await pilot.press("ctrl+enter")
-        await pilot.pause()
-        # 不提交
-        assert pilot.app.submitted == []
-        # 文本变两行
-        assert "\n" in ta.text
+def test_paste_folder_expand_restores_original():
+    """expand 把占位符还原回原文。"""
+    from sunday.tui.cli import PasteFolder
+
+    pf = PasteFolder(threshold=4)
+    original = "L1\nL2\nL3\nL4\nL5"
+    placeholder = pf.maybe_fold(original)
+    # 假设用户在占位符前后还输入了内容
+    submitted = f"前缀 {placeholder} 后缀"
+    expanded = pf.expand(submitted)
+    assert expanded == f"前缀 {original} 后缀"
 
 
-async def test_backslash_continuation_creates_newline(make_app):
-    r"""行尾 `\` + Enter：删 \ 并插入换行，不提交（Claude Code 反斜杠续行）。"""
-    app = make_app()
-    async with app.run_test(headless=True) as pilot:
-        ta = pilot.app.query_one("#pta")
-        ta.text = "line1\\"
-        ta.focus()
-        ta.move_cursor(ta.document.end)
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-        # 不提交
-        assert pilot.app.submitted == []
-        # \\ 已被删除并换行
-        assert ta.text == "line1\n"
+def test_paste_folder_expand_without_pending_is_identity():
+    """没有 pending 占位符时 expand 不改字符串。"""
+    from sunday.tui.cli import PasteFolder
+
+    pf = PasteFolder(threshold=4)
+    assert pf.expand("hello world") == "hello world"
 
 
-async def test_paste_fold_threshold_above(make_app):
-    """>4 行粘贴折叠为 [Pasted N lines #xxxxxx] 占位符。"""
-    from textual import events
+def test_paste_folder_reset_clears_pending():
+    """reset 后再 expand 找不到旧占位符（保留原占位符文本）。"""
+    from sunday.tui.cli import PasteFolder
 
-    app = make_app(fold_threshold=4)
-    async with app.run_test(headless=True) as pilot:
-        ta = pilot.app.query_one("#pta")
-        ta.focus()
-        await pilot.pause()
-        big = "L1\nL2\nL3\nL4\nL5\nL6"  # 6 lines, >4
-        ta.post_message(events.Paste(big))
-        await pilot.pause()
-        # 输入框中显示占位符而非完整文本
-        assert "[Pasted 6 lines" in ta.text
-        # 占位符 ID 是 6 位 hex
-        import re
-        m = re.search(r"\[Pasted 6 lines #([0-9a-f]{6})\]", ta.text)
-        assert m is not None
+    pf = PasteFolder(threshold=4)
+    placeholder = pf.maybe_fold("a\nb\nc\nd\ne")
+    pf.reset()
+    # 现在 expand 这个占位符应该保留原样（因为 pending 已清）
+    assert pf.expand(placeholder) == placeholder
 
 
-async def test_paste_below_threshold_inserts_inline(make_app):
-    """<=4 行粘贴原样插入。"""
-    from textual import events
+def test_paste_folder_unknown_placeholder_id_kept_intact():
+    """expand 遇到不在 pending 中的占位符 ID 保留原样。"""
+    from sunday.tui.cli import PasteFolder
 
-    app = make_app(fold_threshold=4)
-    async with app.run_test(headless=True) as pilot:
-        ta = pilot.app.query_one("#pta")
-        ta.focus()
-        await pilot.pause()
-        small = "a\nb\nc"  # 3 lines, ≤ 4
-        ta.post_message(events.Paste(small))
-        await pilot.pause()
-        # 不应有占位符
-        assert "Pasted" not in ta.text
-        assert "a\nb\nc" in ta.text
-
-
-async def test_paste_expanded_on_submit(make_app):
-    """Submit 时占位符还原为原始多行内容。"""
-    from textual import events
-
-    app = make_app(fold_threshold=4)
-    async with app.run_test(headless=True) as pilot:
-        ta = pilot.app.query_one("#pta")
-        ta.focus()
-        await pilot.pause()
-        big = "L1\nL2\nL3\nL4\nL5"  # 5 lines, >4
-        ta.post_message(events.Paste(big))
-        await pilot.pause()
-        # 提交
-        await pilot.press("enter")
-        await pilot.pause()
-        # 提交内容是完整原文，非占位符
-        assert pilot.app.submitted == [big]
-
-
-async def test_history_prev_at_first_line(make_app):
-    """光标在首行时按 ↑ 触发历史回溯；非首行不触发。"""
-    from sunday.tui.widgets.input_history import InputHistory
-
-    history = InputHistory()
-    history.append("alpha")
-    history.append("beta")
-    app = make_app(history=history)
-    async with app.run_test(headless=True) as pilot:
-        ta = pilot.app.query_one("#pta")
-        ta.focus()
-        await pilot.pause()
-        # 光标在 (0, 0) → 首行 → ↑ 触发历史
-        await pilot.press("up")
-        await pilot.pause()
-        assert ta.text == "beta"
-        # 再 ↑ → alpha
-        await pilot.press("up")
-        await pilot.pause()
-        assert ta.text == "alpha"
-
-
-async def test_history_next_returns_to_draft(make_app):
-    """↓ 一路向后回到原始草稿（空）。"""
-    from sunday.tui.widgets.input_history import InputHistory
-
-    history = InputHistory()
-    history.append("alpha")
-    app = make_app(history=history)
-    async with app.run_test(headless=True) as pilot:
-        ta = pilot.app.query_one("#pta")
-        ta.focus()
-        await pilot.pause()
-        await pilot.press("up")    # → "alpha"
-        await pilot.pause()
-        assert ta.text == "alpha"
-        await pilot.press("down")  # → 回到草稿（空）
-        await pilot.pause()
-        assert ta.text == ""
+    pf = PasteFolder(threshold=4)
+    # 凭空伪造一个占位符（未经过 maybe_fold）
+    fake = "[Pasted 10 lines #abcdef]"
+    assert pf.expand(fake) == fake

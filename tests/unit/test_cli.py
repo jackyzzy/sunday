@@ -35,13 +35,13 @@ def test_version(runner):
 # ── 真实命令测试（mock 外部依赖） ──────────────────────────────────────────────
 
 def test_tui_starts_app(runner):
-    """sunday tui 正常启动（mock Textual App）"""
-    mock_app = MagicMock()
-    mock_app.run = MagicMock()
-    with patch("sunday.tui.app.SundayApp", return_value=mock_app):
+    """sunday tui 正常启动（mock 新 prompt_toolkit 主入口 run）"""
+    with patch("sunday.tui.cli.run") as mock_run:
         result = runner.invoke(main, ["tui"])
     assert result.exit_code == 0
-    mock_app.run.assert_called_once()
+    mock_run.assert_called_once()
+    # 端口默认 7899
+    assert mock_run.call_args.kwargs.get("port") == 7899
 
 
 def test_service_start_already_running(runner, tmp_path):
