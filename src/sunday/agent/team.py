@@ -55,14 +55,15 @@ class Team:
         executor_prompt_override: str | None = None,
         templates: "TemplateLoader | None" = None,
     ) -> None:
+        self.emit = emit or noop_emit
         self.planner = Planner(config, templates=templates)
         self.executor = Executor(
             config,
             tool_registry=tool_registry,
             executor_prompt_override=executor_prompt_override,
+            emit=self.emit,
         )
         self.verifier = Verifier(config)
-        self.emit = emit or noop_emit
 
     async def run(self, step: Step, parent_state: AgentState) -> TeamResult:
         """执行单个顶层 Step，返回 TeamResult。

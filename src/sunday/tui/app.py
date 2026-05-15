@@ -258,6 +258,26 @@ class SundayApp(App):
                 status.set_error(payload.get("message", ""))
             elif state == "busy":
                 chat.add_system_message(payload.get("message", "任务运行中"))
+            elif state.startswith("team:") and state.endswith(":planning"):
+                step_id = state.split(":")[1]
+                status.set_sub_executing(f"{step_id} 子规划")
+            elif state.startswith("team:"):
+                parts = state.split(":")
+                label = f"{parts[1]}/{parts[2]}" if len(parts) >= 3 else state[5:]
+                status.set_sub_executing(label)
+            elif state.startswith("simple:"):
+                step_id = state.split(":", 1)[1]
+                status.set_executing(step_id)
+            elif state == "replanning":
+                status.set_replanning()
+                step_id = payload.get("step_id", "")
+                reason = payload.get("failure_reason", "")
+                msg = f"[重规划] {step_id}"
+                if reason:
+                    msg += f"：{reason[:80]}"
+                chat.add_system_message(msg)
+            elif state == "summarizing":
+                status.set_summarizing()
 
         elif event_type == EventType.PLAN.value:
             chat.add_plan(
@@ -288,6 +308,22 @@ class SundayApp(App):
                 status=payload.get("status", ""),
                 verified=payload.get("verified"),
             )
+
+        elif event_type == EventType.SUB_STEP_RESULT.value:
+            chat.add_sub_step_result(
+                sub_step_id=payload.get("sub_step_id", ""),
+                verified=payload.get("verified"),
+            )
+
+        elif event_type == EventType.TOOL_START.value:
+            tool_name = payload.get("tool", "")
+            args_preview = payload.get("args_preview", "")
+            chat.add_tool_activity(tool_name, args_preview)
+            status.set_tool_calling(tool_name)
+
+        elif event_type == EventType.TOOL_END.value:
+            step_id = payload.get("step_id", "")
+            status.set_executing(step_id)
 
         elif event_type == EventType.SLASH_RESULT.value:
             cmd = payload.get("command", "")

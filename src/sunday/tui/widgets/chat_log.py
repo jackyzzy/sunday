@@ -81,3 +81,11 @@ class ChatLog(Widget):
         self._log.write(f"[bold red]⚠ 确认请求[/bold red] 工具：{tool}")
         self._log.write(f"  {message}")
         self._log.write("  请回复 [bold]y[/bold] 确认或 [bold]n[/bold] 取消")
+
+    def add_sub_step_result(self, sub_step_id: str, verified: bool | None) -> None:
+        icon = "[green]✓[/green]" if verified else "[red]✗[/red]"
+        self._log.write(f"    {icon} {sub_step_id}")
+
+    def add_tool_activity(self, tool_name: str, args_preview: str = "") -> None:
+        suffix = f" {args_preview!r}" if args_preview else ""
+        self._log.write(f"  [dim]→ {tool_name}{suffix}[/dim]")

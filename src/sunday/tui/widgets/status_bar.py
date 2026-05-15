@@ -66,3 +66,15 @@ class StatusBar(Widget):
 
     def set_error(self, msg: str = "") -> None:
         self.status_text = f"● 错误 {msg}".strip()
+
+    def set_sub_executing(self, label: str = "") -> None:
+        self.status_text = f"● 子步骤 {label}" if label else "● 子步骤执行中"
+
+    def set_replanning(self) -> None:
+        self.status_text = "● 重规划中..."
+
+    def set_summarizing(self) -> None:
+        self.status_text = "● 汇总中..."
+
+    def set_tool_calling(self, tool_name: str = "") -> None:
+        self.status_text = f"● → {tool_name}" if tool_name else "● 工具调用中"

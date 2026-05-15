@@ -37,13 +37,14 @@ class SimpleNode:
         from sunday.agent.utils import noop_emit
         from sunday.agent.verifier import Verifier
 
+        self.emit = emit or noop_emit
         self.executor = Executor(
             config,
             tool_registry=tool_registry,
             executor_prompt_override=executor_prompt_override,
+            emit=self.emit,
         )
         self.verifier = Verifier(config)
-        self.emit = emit or noop_emit
 
     async def run(self, step: "Step", parent_state: "AgentState") -> "TeamResult":
         from sunday.agent.executor import MaxStepsError, RepetitionError

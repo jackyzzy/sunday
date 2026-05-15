@@ -15,6 +15,7 @@ from sunday.agent.models import (
 )
 
 if TYPE_CHECKING:
+    from sunday.agent.utils import EmitCallable
     from sunday.config import ModelConfig, SundayConfig
 
 logger = logging.getLogger(__name__)
@@ -48,13 +49,16 @@ class Executor:
         config: "SundayConfig",
         tool_registry: ToolRegistryProtocol | None = None,
         executor_prompt_override: str | None = None,
+        emit: "EmitCallable | None" = None,
     ) -> None:
         from sunday.agent.prompt_resolver import PromptResolver
+        from sunday.agent.utils import noop_emit
 
         self.config = config
         self.tool_registry = tool_registry
         self._executor_prompt_override = executor_prompt_override
         self._resolver = PromptResolver(config)
+        self.emit = emit or noop_emit
 
     def _get_system_prompt(self, step_type: str = "generic") -> str:
         """按 step_type 路由 prompt：
@@ -174,12 +178,32 @@ class Executor:
                 messages.extend(provider.build_tool_result_messages(response, observation))
                 continue
 
+            # 取第一个参数值作为预览（如搜索词、文件名等）
+            args_preview = next(iter(arguments.values()), "") if arguments else ""
+            if not isinstance(args_preview, str):
+                args_preview = str(args_preview)
+            args_preview = args_preview[:60]
+
+            await self.emit(state.session_id, "tool_start", {
+                "step_id": step.id,
+                "tool": tc.name,
+                "args_preview": args_preview,
+                "iteration": i,
+            })
+
             if self.tool_registry:
                 observation = await self.tool_registry.execute(
                     tc.name, arguments, state.session_id
                 )
             else:
                 observation = f"[工具 {tc.name} 不可用]"
+
+            await self.emit(state.session_id, "tool_end", {
+                "step_id": step.id,
+                "tool": tc.name,
+                "iteration": i,
+                "result_preview": (observation or "")[:80],
+            })
 
             iterations.append(ReactIteration(
                 iteration=i,
