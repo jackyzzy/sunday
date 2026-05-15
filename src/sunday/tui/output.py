@@ -7,58 +7,67 @@
 - 临时状态（thinking / executing 子状态）只更新 StatusSpinner，不写 scrollback
 - 所有 Rich markup 字符串与原 ChatLog 完全一致，方便对照
 
-依赖：rich.console.Console（由 cli.py 注入），rich.live.Live（spinner）
+依赖：rich.console.Console（由 cli.py 注入）
 """
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING
-
-from rich.live import Live
-from rich.spinner import Spinner
-from rich.text import Text
 
 if TYPE_CHECKING:
     from rich.console import Console
 
 
-class StatusSpinner:
-    """运行时 spinner：在屏幕底部显示当前阶段，新输出自动把它推上去再重绘。
+_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-    使用 rich.live.Live(transient=True) —— 完成时自动清除占用的行，
-    不污染 scrollback。Live 内部 vt 协议会和 patch_stdout 协作正确。
+
+class StatusSpinner:
+    """运行时 spinner：纯状态容器，由 prompt_toolkit 的 bottom_toolbar 渲染。
+
+    Why not rich.Live：Live 会和 prompt_toolkit 抢占终端底部行，导致 Frame
+    渲染错乱、spinner 与 prompt 重叠。改用"状态容器 + toolbar 主动取值 +
+    PromptSession.refresh_interval 自动转帧"模式，与 prompt_toolkit 协作良好。
     """
 
-    def __init__(self, console: "Console") -> None:
+    def __init__(self, console: "Console" | None = None) -> None:
+        # console 仅保留兼容签名，本类不直接输出
         self._console = console
-        self._live: Live | None = None
         self._text: str = ""
+        self._frame_index: int = 0
 
     def update(self, text: str) -> None:
-        """更新 spinner 文本；首次调用会启动 Live。"""
+        """更新 spinner 文本；下一次 toolbar 渲染会拾取。"""
         self._text = text
-        if self._live is None:
-            spinner = Spinner("dots", text=Text(text, style="cyan"))
-            self._live = Live(
-                spinner,
-                console=self._console,
-                refresh_per_second=10,
-                transient=True,
-            )
-            self._live.start()
-        else:
-            self._live.update(Spinner("dots", text=Text(text, style="cyan")))
+        self._invalidate_app()
 
     def stop(self) -> None:
-        """清除 spinner（在终端原地清掉，不留痕迹）。"""
-        if self._live is not None:
-            self._live.stop()
-            self._live = None
+        """清除 spinner 文本，toolbar 回落到默认快捷键提示。"""
+        if self._text:
             self._text = ""
+            self._invalidate_app()
+
+    def toolbar_text(self, default_hint: str) -> str:
+        """供 bottom_toolbar callable 调用：有 spinner 则展示动画 + 文本，
+        否则展示传入的默认快捷键提示。每次调用推进一帧，配合
+        PromptSession(refresh_interval=...) 形成动画。
+        """
+        if not self._text:
+            return default_hint
+        frame = _SPINNER_FRAMES[self._frame_index % len(_SPINNER_FRAMES)]
+        self._frame_index += 1
+        return f"{frame} {self._text}"
 
     @property
     def is_running(self) -> bool:
-        return self._live is not None
+        return bool(self._text)
+
+    @staticmethod
+    def _invalidate_app() -> None:
+        """触发 prompt_toolkit 立即重绘（如果有 App 在跑）。"""
+        try:
+            from prompt_toolkit.application import get_app
+            get_app().invalidate()
+        except Exception:
+            pass  # 没有运行中的 app（启动初期或退出阶段），忽略
 
 
 # ── 启动 banner ─────────────────────────────────────────────────────────────

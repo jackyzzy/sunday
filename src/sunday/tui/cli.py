@@ -16,10 +16,12 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.filters import is_done
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import History
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.styles import Style
 from rich.console import Console
 
 from sunday.config import settings
@@ -388,6 +390,17 @@ async def _async_main(port: int) -> None:
         await slash.handle("/history")
 
         kb = _build_keybindings(send_abort)
+        ptk_style = Style.from_dict({
+            "frame.border": "ansibrightcyan",
+            "bottom-toolbar": "ansibrightblack",
+        })
+
+        _DEFAULT_HINT = "Enter 提交  ·  Ctrl+J 换行  ·  ↑↓ 历史  ·  /help 命令  ·  Esc 中止"
+
+        def _bottom_toolbar() -> str:
+            # 有 spinner 在跑则显示 "⠋ 思考中..."；否则显示快捷键提示
+            return spinner.toolbar_text(_DEFAULT_HINT)
+
         ptk_session: PromptSession = PromptSession(
             ANSI("\x1b[1;36m[用户]\x1b[0m "),  # bold cyan 与原 ChatLog 一致
             multiline=True,
@@ -396,6 +409,10 @@ async def _async_main(port: int) -> None:
             enable_history_search=False,
             mouse_support=False,
             prompt_continuation=".... ",
+            show_frame=~is_done,
+            bottom_toolbar=_bottom_toolbar,
+            style=ptk_style,
+            refresh_interval=0.1,  # 让 spinner 帧动画转起来
         )
 
         try:
