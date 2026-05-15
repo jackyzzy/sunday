@@ -15,13 +15,19 @@ import sys
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.filters import is_done
+from prompt_toolkit.application import Application, get_app
+from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.filters import Condition, is_done
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import History
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import Layout
+from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.dimension import D
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import Frame
 from rich.console import Console
 
 from sunday.config import settings
@@ -393,37 +399,98 @@ async def _async_main(port: int) -> None:
         ptk_style = Style.from_dict({
             "frame.border": "ansibrightcyan",
             "bottom-toolbar": "ansibrightblack",
+            "status-line": "ansibrightcyan",
         })
 
         _DEFAULT_HINT = "Enter 提交  ·  Ctrl+J 换行  ·  ↑↓ 历史  ·  /help 命令  ·  Esc 中止"
 
-        def _bottom_toolbar() -> str:
-            # 有 spinner 在跑则显示 "⠋ 思考中..."；否则显示快捷键提示
-            return spinner.toolbar_text(_DEFAULT_HINT)
+        # 输入 buffer：multiline + history + accept_handler(让 Enter 触发 app.exit)
+        def _accept(buf: Buffer) -> bool:
+            get_app().exit(result=buf.text)
+            return True  # reset buffer（兜底，主循环还会再 reset 一次）
 
-        ptk_session: PromptSession = PromptSession(
-            ANSI("\x1b[1;36m[用户]\x1b[0m "),  # bold cyan 与原 ChatLog 一致
+        input_buffer = Buffer(
             multiline=True,
-            key_bindings=kb,
             history=_PtkHistoryAdapter(input_history),
             enable_history_search=False,
-            mouse_support=False,
-            prompt_continuation=".... ",
-            show_frame=~is_done,
-            bottom_toolbar=_bottom_toolbar,
+            accept_handler=_accept,
+        )
+
+        # 行前缀：首行显示 [用户]，续行显示 .... （与原 prompt_continuation 一致）
+        _PROMPT_FIRST = ANSI("\x1b[1;36m[用户]\x1b[0m ")
+        _PROMPT_CONT = ".... "
+        def _line_prefix(line_number: int, wrap_count: int):
+            if line_number == 0 and wrap_count == 0:
+                return _PROMPT_FIRST
+            return _PROMPT_CONT
+
+        input_window = Window(
+            content=BufferControl(buffer=input_buffer),
+            get_line_prefix=_line_prefix,
+            dont_extend_height=True,
+            height=D(min=1),
+            wrap_lines=True,
+        )
+
+        # spinner 行（仅 spinner 运行时占用一行）
+        status_window = ConditionalContainer(
+            content=Window(
+                content=FormattedTextControl(text=lambda: spinner.toolbar_text("")),
+                height=1,
+                style="class:status-line",
+            ),
+            filter=Condition(lambda: spinner.is_running) & ~is_done,
+        )
+
+        # 固定 toolbar（始终显示快捷键，提交瞬间随 app 退出消失）
+        toolbar_window = ConditionalContainer(
+            content=Window(
+                content=FormattedTextControl(text=lambda: _DEFAULT_HINT),
+                height=1,
+                style="class:bottom-toolbar",
+            ),
+            filter=~is_done,
+        )
+
+        # Frame 仅在等待输入时显示，提交后自动消失，让输入文本以裸行留在 scrollback
+        framed_input = ConditionalContainer(
+            content=Frame(input_window),
+            filter=~is_done,
+        )
+        bare_input = ConditionalContainer(
+            content=input_window,
+            filter=is_done,
+        )
+
+        root_layout = HSplit([
+            status_window,
+            framed_input,
+            bare_input,
+            toolbar_window,
+        ])
+
+        app: Application[str] = Application(
+            layout=Layout(root_layout, focused_element=input_window),
+            key_bindings=kb,
             style=ptk_style,
+            full_screen=False,
+            mouse_support=False,
             refresh_interval=0.1,  # 让 spinner 帧动画转起来
+            erase_when_done=False,
         )
 
         try:
             while True:
+                input_buffer.reset()
                 try:
                     with patch_stdout(raw=True):
-                        text = await ptk_session.prompt_async()
+                        text = await app.run_async()
                 except (EOFError, KeyboardInterrupt):
                     break
 
-                text = paste_folder.expand(text or "")
+                if text is None:
+                    break
+                text = paste_folder.expand(text)
                 paste_folder.reset()
                 text = text.strip()
                 if not text:
