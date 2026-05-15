@@ -74,10 +74,13 @@ class Executor:
             return await self._run_inner(step, state)
         except Exception as e:
             import httpx
+            from sunday.agent.providers.base import LLMAPIError
             if isinstance(e, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
                 msg = f"网络连接失败：{type(e).__name__}（请检查网络或代理配置）"
             elif isinstance(e, httpx.RemoteProtocolError):
                 msg = f"服务端连接中断：{e}（可能是上下文过长或服务端超时，可重试）"
+            elif isinstance(e, LLMAPIError):
+                msg = f"LLM API 错误（步骤标记失败，可触发 replan）：{e}"
             else:
                 raise
             logger.error("步骤 %s LLM 调用失败：%s", step.id, msg)

@@ -69,7 +69,7 @@ class ReasoningConfig(BaseModel):
     # 单 sub-step 内 ReAct 工具调用轮次上限（>15 会显著膨胀上下文）
     max_react_iterations_per_substep: int = 15
     # Team 内层 sub-plan 重规划上限（每次都跑完整 ReAct，过高会爆调用数）
-    max_replans_per_step: int = 3
+    max_replans_per_step: int = 2
     # 全局外层重规划总上限（跨所有 top-level step 累加）
     max_replans: int = 3
     thinking_level: str = "medium"     # off | minimal | low | medium | high

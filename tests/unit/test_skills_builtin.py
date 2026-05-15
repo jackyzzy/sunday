@@ -122,17 +122,42 @@ async def test_files_skill_batch_rename_no_match(tmp_path):
 # ── T6-2 网络搜索技能增强测试 ─────────────────────────────────────────────────
 
 
-async def test_web_search_no_api_key_returns_error():
-    """未配置 TAVILY_API_KEY 时返回友好错误"""
+async def test_web_search_no_api_key_falls_back_to_ddg():
+    """Bug #4: 未配置 TAVILY_API_KEY 时不再返回 [错误]，而是 silent fallback 到 DDG。
+
+    严格 mock httpx 避免真实网络请求（CLAUDE.md 网络隔离原则）。
+    """
     import os
+    from unittest.mock import MagicMock
+
+    # Mock DDG 返回最小可解析 HTML（保证 fallback 走通而非 _BackendError）
+    ddg_html = (
+        '<div class="result results_links results_links_deep web-result">'
+        '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com">Example</a>'
+        '<a class="result__snippet">test snippet</a>'
+        "</div>"
+    )
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = ddg_html
+    mock_resp.raise_for_status.return_value = None
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=mock_resp)
 
     with patch.dict(os.environ, {}, clear=True):
         os.environ.pop("TAVILY_API_KEY", None)
-        from skills.web_search.tools import web_search
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            from skills.web_search.tools import web_search
 
-        result = await web_search("test query")
-    assert "[错误]" in result
-    assert "TAVILY_API_KEY" in result
+            result = await web_search("test query")
+
+    # 新行为：fallback 到 DDG，返回真实结果（含 source 标记）
+    assert "[错误]" not in result, f"无 KEY 应 silent fallback 到 DDG，实际：{result[:200]}"
+    assert "Example" in result
+    assert "duckduckgo" in result.lower()
 
 
 async def test_web_search_calls_api():

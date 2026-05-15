@@ -84,9 +84,85 @@ async def probe_tavily() -> ProbeResult:
         )
 
 
+# ── DuckDuckGo probe ──────────────────────────────────────────────────────────
+
+async def probe_duckduckgo() -> ProbeResult:
+    """探测 DuckDuckGo HTML 端点可用性（无 auth，零 quota）。
+
+    用最便宜的 query="test" 抓首页，只关心 HTTP 200。
+    """
+    from sunday.tools.error_classifier import classify
+
+    try:
+        import httpx
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) "
+                "Gecko/20100101 Firefox/128.0"
+            )
+        }
+        async with httpx.AsyncClient(
+            timeout=10, follow_redirects=True, headers=headers
+        ) as client:
+            resp = await client.get(
+                "https://html.duckduckgo.com/html/", params={"q": "test"}
+            )
+
+        if resp.status_code == 200:
+            return ProbeResult(success=True, detail="DuckDuckGo HTML 端点可用")
+
+        error_text = f"HTTP {resp.status_code}"
+        error_type, suggestion = classify(f"[工具错误] {error_text}")
+        return ProbeResult(
+            success=False,
+            error_type=error_type if error_type != ErrorType.UNKNOWN else ErrorType.NETWORK_ERROR,
+            detail=error_text,
+            suggestion=suggestion or "DuckDuckGo 可能被限流或暂时不可用",
+        )
+
+    except Exception as e:
+        error_type, suggestion = classify(f"[工具错误] {e}")
+        return ProbeResult(
+            success=False,
+            error_type=error_type if error_type != ErrorType.UNKNOWN else ErrorType.NETWORK_ERROR,
+            detail=str(e),
+            suggestion=suggestion or "请检查网络连接或代理配置",
+        )
+
+
+# ── 复合 probe：Tavily 优先，DDG 兜底 ────────────────────────────────────────
+
+async def probe_web_search() -> ProbeResult:
+    """探测 web_search 工具可用性。
+
+    与 web_search 内部 fallback 链对齐：Tavily 任一可用即视为 web_search 可用。
+    只有 Tavily + DDG 双路都失败才报错。返回的 detail 会注明实际可用的 backend，
+    供调试与健康面板展示。
+    """
+    tavily_result = await probe_tavily()
+    if tavily_result.success:
+        return ProbeResult(success=True, detail=f"backend=tavily ({tavily_result.detail})")
+
+    ddg_result = await probe_duckduckgo()
+    if ddg_result.success:
+        return ProbeResult(
+            success=True,
+            detail=f"backend=duckduckgo (Tavily 不可用：{tavily_result.detail})",
+        )
+
+    # 双路都不行 — 暴露更具体的失败原因（优先 DDG 错误，因 DDG 是最终兜底）
+    return ProbeResult(
+        success=False,
+        error_type=ddg_result.error_type,
+        detail=f"Tavily: {tavily_result.detail}; DuckDuckGo: {ddg_result.detail}",
+        suggestion=ddg_result.suggestion or tavily_result.suggestion,
+    )
+
+
 # ── 内置 probe 映射表 ─────────────────────────────────────────────────────────
 
 # 工具名 → probe 函数。优先级低于 ToolMeta.probe 字段（ToolMeta 有则用 ToolMeta 的）。
 BUILTIN_PROBES: dict[str, ProbeFunc] = {
-    "web_search": probe_tavily,
+    "web_search": probe_web_search,
 }

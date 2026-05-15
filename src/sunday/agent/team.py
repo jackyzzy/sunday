@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from sunday.agent.executor import Executor, MaxStepsError, RepetitionError
@@ -16,6 +17,27 @@ if TYPE_CHECKING:
     from sunday.templates.loader import TemplateLoader
 
 logger = logging.getLogger(__name__)
+
+
+def _is_same_failure(prev: str, curr: str, threshold: float = 0.6) -> bool:
+    """两次子步骤失败原因的字符级相似度是否超过阈值。
+
+    用于检测重复失败：若相邻两次 verify_reason 字符/词集合重叠率 ≥ threshold，
+    视为模型在同一类失败上卡住，跳过后续 sub-replan 以节省时间。
+
+    tokenize 策略：中文逐字拆分，英文/数字按词拆分，兼容中英混合 reason。
+    短文本（token 数 < 5）不做判断，直接返回 False 以避免误判。
+    """
+    if not prev or not curr:
+        return False
+    # 中文单字 + 英文/数字词
+    pattern = re.compile(r"[一-鿿]|[a-zA-Z0-9]+")
+    prev_tokens = set(pattern.findall(prev.lower()))
+    curr_tokens = set(pattern.findall(curr.lower()))
+    short = min(len(prev_tokens), len(curr_tokens))
+    if short < 5:
+        return False
+    return len(prev_tokens & curr_tokens) / short >= threshold
 
 
 class Team:
@@ -103,6 +125,7 @@ class Team:
         total_sub_replan_count = 0
         broke_on_failure = False
         last_verify_should_replan = True  # 记录最后失败步骤的 should_replan，供外层决策
+        prev_failure_reason = ""  # 上次子步骤失败的 verify_reason，用于重复失败早退
 
         while idx < len(sub_steps):
             sub_step = sub_steps[idx]
@@ -138,6 +161,17 @@ class Team:
 
             # 子步骤失败：尝试内层重规划（仅当验证器认为有意义时）
             if total_sub_replan_count < max_sub_replans and verify.should_replan:
+                # 相同失败原因早退：若本次与上次失败原因高度相似，说明模型卡在同一问题上，
+                # 再 sub-replan 无意义，直接终止以避免浪费时间
+                if total_sub_replan_count > 0 and _is_same_failure(prev_failure_reason, verify.reason):
+                    logger.info(
+                        "Team %s 子步骤 %s 失败原因与上次高度相似，跳过 sub-replan 直接终止",
+                        step.id, sub_step.id,
+                    )
+                    last_verify_should_replan = verify.should_replan
+                    broke_on_failure = True
+                    break
+                prev_failure_reason = verify.reason
                 total_sub_replan_count += 1
                 logger.info(
                     "Team %s 子步骤 %s 失败，触发子任务重规划（%d/%d）",
