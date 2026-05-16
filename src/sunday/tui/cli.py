@@ -21,6 +21,7 @@ from prompt_toolkit.filters import Condition, is_done
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import History
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
@@ -275,8 +276,23 @@ class EventDispatcher:
 
 # ── Key bindings ────────────────────────────────────────────────────────────
 
-def _build_keybindings(send_abort: Callable[[], Awaitable[None]]) -> KeyBindings:
+def _build_keybindings(
+    send_abort: Callable[[], Awaitable[None]],
+    paste_folder: "PasteFolder",
+    is_busy: Callable[[], bool],
+) -> KeyBindings:
     kb = KeyBindings()
+
+    @kb.add(Keys.BracketedPaste, eager=True)
+    def _on_paste(event):
+        # 拦截 bracketed-paste：多行粘贴折叠为 [Pasted N lines #xxxxxx]
+        # 规范化换行（Windows \r\n / 老 Mac \r）—— 否则 count("\n") 算少
+        # eager=True 让 KeyProcessor 在匹配到本 binding 时立即执行、绕过同一 key 的默认 emacs handler
+        data = event.data.replace("\r\n", "\n").replace("\r", "\n")
+        line_count = data.count("\n") + 1
+        logger.info("BracketedPaste 命中：%d 字符 / %d 行", len(data), line_count)
+        folded = paste_folder.maybe_fold(data)
+        event.current_buffer.insert_text(folded)
 
     @kb.add("enter")
     def _on_enter(event):
@@ -326,8 +342,12 @@ def _build_keybindings(send_abort: Callable[[], Awaitable[None]]) -> KeyBindings
 
     @kb.add("escape", eager=True)
     def _on_escape(event):
-        # 后台异步发送 abort
-        asyncio.get_event_loop().create_task(send_abort())
+        # busy（spinner 在跑）→ 中止当前任务；空闲 → 退出 TUI
+        # 用 result=None 路径而非 exception=EOFError，绕开 patch_stdout 异常传播潜在死路
+        if is_busy():
+            event.app.create_background_task(send_abort())
+        else:
+            event.app.exit(result=None)
 
     return kb
 
@@ -395,7 +415,7 @@ async def _async_main(port: int) -> None:
         )
         await slash.handle("/history")
 
-        kb = _build_keybindings(send_abort)
+        kb = _build_keybindings(send_abort, paste_folder, lambda: spinner.is_running)
         ptk_style = Style.from_dict({
             "frame.border": "ansibrightcyan",
             "bottom-toolbar": "ansibrightblack",
