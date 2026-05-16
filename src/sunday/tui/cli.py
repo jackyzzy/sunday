@@ -452,14 +452,17 @@ async def _async_main(port: int) -> None:
             wrap_lines=True,
         )
 
-        # spinner 行（仅 spinner 运行时占用一行）
+        # spinner 行：等待输入期间始终占 1 行（spinner 没跑时显示空白）。
+        # Why not `is_running & ~is_done`：那样 layout 高度会随 spinner 启停切换 1↔2 行，
+        # 触发 prompt_toolkit non-full-screen 的"lift"机制 —— 每帧 spinner 都被推到
+        # scrollback。固定占 1 行让 layout 高度只在 is_done 翻转那一次变化，不会污染 scrollback。
         status_window = ConditionalContainer(
             content=Window(
                 content=FormattedTextControl(text=lambda: spinner.toolbar_text("")),
                 height=1,
                 style="class:status-line",
             ),
-            filter=Condition(lambda: spinner.is_running) & ~is_done,
+            filter=~is_done,
         )
 
         # 固定 toolbar（始终显示快捷键，提交瞬间随 app 退出消失）

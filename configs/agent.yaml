@@ -14,17 +14,17 @@ model:
   base_url: https://api.deepseek.com/v1
   api_key_env: DEEPSEEK_API_KEY
 reasoning:
+  # 全局外层重规划总上限：跨所有 top-level step 累加，10 次合理
+  max_replans: 3
   # 顶层 step 数上限：Planner 一次产出超过则截断（react_agent.py 处理）
   max_steps: 10
-  # Team 内 sub-step 数上限：Team 子规划超过则截断（team.py 处理）
-  max_steps_per_step: 3
-  # 单 sub-step 内 ReAct 工具调用轮次上限：>15 会显著膨胀上下文
-  max_react_iterations_per_substep: 15
   # Team 内 sub-plan 重规划上限：每次都跑完整 ReAct（~30 调用），2 次足以处理偶发失败；
   # 3 次在结构性失败（成功标准超出 iter 预算）时会额外浪费 5-9 分钟
   max_replans_per_step: 2
-  # 全局外层重规划总上限：跨所有 top-level step 累加，10 次合理
-  max_replans: 3
+  # Team 内 sub-step 数上限：Team 子规划超过则截断（team.py 处理）
+  max_steps_per_step: 10
+  # 单 sub-step 内 ReAct 工具调用轮次上限：>15 会显著膨胀上下文
+  max_react_iterations_per_substep: 20
   thinking_level: medium
 memory:
   consolidation_cron: 0 4 * * *
