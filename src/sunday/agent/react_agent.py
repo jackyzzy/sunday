@@ -107,6 +107,9 @@ class ReactAgent:
             await self.tool_registry.probe_all()
             self._probed = True
 
+        # 连接 MCP 服务器并注册其工具（在任何 clone 之前；幂等；无 enabled server 时 no-op）
+        await self.tool_registry.connect_mcp()
+
         start_ts = datetime.now(timezone.utc)
         emit = self.emit
 
@@ -180,6 +183,11 @@ class ReactAgent:
             await self._log_session_error(state, start_ts, e)
             raise
         finally:
+            # 关闭 MCP 连接，回收子进程（与连接同处一个 task，规避跨-task cancel-scope）
+            try:
+                await self.tool_registry.close_mcp()
+            except Exception:
+                logger.exception("关闭 MCP 连接失败（不影响任务结果）")
             logger.info("ReactAgent 结束，session=%s，Team数=%d",
                         state.session_id, len(state.team_results))
 

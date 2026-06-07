@@ -66,6 +66,9 @@ class ToolRegistry:
         self._agent_written_files: list[str] = []
         self._health_store: _HealthStore = health_store or _HealthStore()
         self._pending_probes: dict[str, "ProbeFunc"] = {}
+        self._mcp_manager: Any = None  # MCPClientManager | None
+        self._mcp_servers: list = []
+        self._mcp_connected: bool = False
 
     def clone(self) -> "ToolRegistry":
         """返回当前注册表的独立副本（工具函数引用共享，_tools 字典独立）。
@@ -85,6 +88,9 @@ class ToolRegistry:
         new._agent_written_files = self._agent_written_files  # 共享引用，所有克隆体写同一列表
         new._health_store = self._health_store  # 共享引用
         new._pending_probes = {}  # clone 不继承待探测队列
+        new._mcp_manager = self._mcp_manager  # 共享 manager 引用
+        new._mcp_servers = self._mcp_servers
+        new._mcp_connected = self._mcp_connected
         return new
 
     def set_report_dir(self, d: "Path") -> None:
@@ -152,6 +158,49 @@ class ToolRegistry:
             _probe_one(name, fn) for name, fn in self._pending_probes.items()
         ])
         self._pending_probes.clear()
+
+    def attach_mcp(self, manager: Any, servers: list) -> None:
+        """注入 MCPClientManager 与待连接的 server 列表（build 期调用，不连接）。"""
+        self._mcp_manager = manager
+        self._mcp_servers = servers
+
+    async def connect_mcp(self) -> None:
+        """连接 MCP 服务器并把发现的工具注册进本注册表（幂等）。
+
+        在 ReactAgent.run() 入口、任何 clone() 之前调用一次，使各 Team/SimpleNode
+        的克隆体天然继承 MCP 工具。命名用 MCP 原始工具名；与现有工具冲突时退化为
+        f"{server}_{name}" 并 warning，避免静默覆盖。
+        """
+        if self._mcp_manager is None or self._mcp_connected:
+            return
+        self._mcp_connected = True  # 先置位，避免并发/重入重复连接
+        await self._mcp_manager.initialize(self._mcp_servers)
+
+        for server_name, tool in self._mcp_manager.iter_tools():
+            name = tool.name
+            if name in self._tools:
+                aliased = f"{server_name}_{name}"
+                logger.warning("MCP 工具名冲突：%s 已存在，重命名为 %s", name, aliased)
+                name = aliased
+            meta = ToolMeta(
+                name=name,
+                description=tool.description or f"MCP 工具（来自 {server_name}）",
+                input_schema=tool.inputSchema or {},
+                timeout=self._default_timeout,
+            )
+
+            def _make_fn(srv: str, tname: str) -> Callable:
+                async def _call(**arguments: Any) -> str:
+                    return await self._mcp_manager.call_tool(srv, tname, arguments)
+                return _call
+
+            self.register(meta, _make_fn(server_name, tool.name))
+
+    async def close_mcp(self) -> None:
+        """关闭 MCP 连接（随任务结束回收子进程）。"""
+        if self._mcp_manager is not None and self._mcp_connected:
+            await self._mcp_manager.close()
+            self._mcp_connected = False
 
     def get_schemas(self) -> list[dict]:
         """返回所有工具的 JSON Schema 列表（不可用工具注入状态标注）。"""

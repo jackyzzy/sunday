@@ -146,6 +146,13 @@ class Team:
             verify = await self.verifier.check(sub_step, result, sub_state)
             result.verified = verify.passed
             result.verify_reason = verify.reason
+            if verify.unverified:
+                result.output = self.verifier.apply_unverified_label(result.output)
+                await self.emit(session_id, "verify_unavailable", {
+                    "parent_step_id": step.id,
+                    "sub_step_id": sub_step.id,
+                    "reason": verify.reason,
+                })
             sub_step.status = StepStatus.DONE if verify.passed else StepStatus.FAILED
             sub_state.step_results.append(result)
             await self.emit(session_id, "sub_step_result", {

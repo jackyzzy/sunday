@@ -35,6 +35,9 @@ class VerifyResult(BaseModel):
     passed: bool
     reason: str
     should_replan: bool = False
+    # True 表示「验证未真正运行」（LLM 调用失败 / 响应解析失败）的降级通过，
+    # 区别于「真的验证通过」。调用方据此打 ⚠未验证 标签 + emit verify_unavailable。
+    unverified: bool = False
 
 
 class Verifier:
@@ -83,6 +86,20 @@ class Verifier:
             self._evaluate_prompt = self.config.load_prompt("evaluate")
         return self._evaluate_prompt
 
+    UNVERIFIED_LABEL = "> ⚠ 未验证：校验服务不可用，本结果未经验证，请谨慎采信。\n\n"
+    """未验证降级标签；幂等：已含此前缀的输出不重复打。"""
+
+    def apply_unverified_label(self, output: str) -> str:
+        """对未验证降级的步骤输出 prepend ⚠未验证 标签（受 config 开关 + 幂等保护）。
+
+        由 SimpleNode / Team 在 verify.unverified 时调用，去掉「静默放行」。
+        """
+        if not self.config.quality.unverified_output_label.enabled:
+            return output
+        if output.lstrip().startswith("> ⚠ 未验证"):
+            return output
+        return self.UNVERIFIED_LABEL + output
+
     async def check(self, step: Step, result: StepResult, state: AgentState) -> VerifyResult:
         """对照 success_criteria 判断步骤结果是否通过。"""
         if not step.success_criteria.strip():
@@ -100,8 +117,12 @@ class Verifier:
             raw = await self._call_llm(prompt, model_cfg)
             vr = self._parse_verify_result(raw)
         except Exception as e:
-            logger.warning("check LLM 调用失败（%s），默认通过", e)
-            return VerifyResult(passed=True, reason=f"验证调用失败，默认通过：{e}")
+            logger.warning("check LLM 调用失败（%s），降级为未验证通过", e)
+            return VerifyResult(
+                passed=True,
+                unverified=True,
+                reason=f"⚠ 未验证（验证服务调用失败：{e}）",
+            )
 
         # 三层闸门短路（S3-A）：第一道 fail 直接 return，不再调后续 LLM。
         # 1) 基础 verify fail → 跳过 subject_consistency + tool_usage_audit
@@ -211,6 +232,10 @@ class Verifier:
                 should_replan=bool(data.get("should_replan", False)),
             )
         except (json.JSONDecodeError, KeyError):
-            # 解析失败时保守判断为通过，避免无限重规划
+            # 解析失败：LLM 虽响应但无法得到判定 → 降级为未验证通过（不阻塞、不空转重规划）
             logger.warning("Verifier 响应解析失败，原文：%s", raw[:200])
-            return VerifyResult(passed=True, reason=f"解析失败，原文：{raw[:100]}")
+            return VerifyResult(
+                passed=True,
+                unverified=True,
+                reason=f"⚠ 未验证（验证响应解析失败，原文：{raw[:100]}）",
+            )

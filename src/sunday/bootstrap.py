@@ -37,6 +37,14 @@ def build_tool_registry(
     project_skills_dir = workspace_dir.parent.parent / "skills"
     load_skill_tools(project_skills_dir, registry)
     load_user_tools(workspace_dir, registry)
+
+    # MCP：注入 manager 与 enabled server 列表（实际连接延迟到 ReactAgent.run()）
+    enabled_servers = [s for s in cfg.mcp.servers if s.enabled]
+    if enabled_servers:
+        from sunday.tools.mcp_client import MCPClientManager
+
+        registry.attach_mcp(MCPClientManager(), enabled_servers)
+
     return registry
 
 

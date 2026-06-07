@@ -193,8 +193,20 @@ class SynthesisQualityCheckConfig(BaseModel):
     enabled: bool = True
 
 
+class UnverifiedOutputLabelConfig(BaseModel):
+    """Verifier 未验证降级打标配置。
+
+    enabled=true 时，当验证 LLM 调用失败（缺 key/网络/超时）或响应解析失败导致
+    无法真正校验时，仍交付结果（保可用性），但给输出 prepend "⚠ 未验证" 标签、
+    并在 verify_reason 加醒目前缀 + emit verify_unavailable 日志事件（去掉「静默」）。
+    """
+
+    enabled: bool = True
+
+
 class QualityConfig(BaseModel):
-    """质量控制开关：事实核查 / 主题一致性 / 最终步骤锚定 / 实时性识别 / 未联网打标 / 工具审计 / 综合质量"""
+    """质量控制开关：事实核查 / 主题一致性 / 最终步骤锚定 / 实时性识别 /
+    未联网打标 / 工具审计 / 综合质量 / 未验证降级打标。"""
 
     fact_check: FactCheckConfig = Field(default_factory=FactCheckConfig)
     subject_consistency: SubjectConsistencyConfig = Field(
@@ -210,6 +222,9 @@ class QualityConfig(BaseModel):
     tool_usage_audit: ToolUsageAuditConfig = Field(default_factory=ToolUsageAuditConfig)
     synthesis_quality_check: SynthesisQualityCheckConfig = Field(
         default_factory=SynthesisQualityCheckConfig
+    )
+    unverified_output_label: UnverifiedOutputLabelConfig = Field(
+        default_factory=UnverifiedOutputLabelConfig
     )
 
 

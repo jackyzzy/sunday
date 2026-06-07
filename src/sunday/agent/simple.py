@@ -59,6 +59,12 @@ class SimpleNode:
         verify = await self.verifier.check(step, result, parent_state)
         result.verified = verify.passed
         result.verify_reason = verify.reason
+        if verify.unverified:
+            result.output = self.verifier.apply_unverified_label(result.output)
+            await self.emit(session_id, "verify_unavailable", {
+                "step_id": step.id,
+                "reason": verify.reason,
+            })
         return TeamResult(
             step_id=step.id,
             passed=verify.passed,

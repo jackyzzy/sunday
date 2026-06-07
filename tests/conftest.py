@@ -7,6 +7,22 @@ import pytest
 import yaml
 
 
+@pytest.fixture(autouse=True)
+def _fake_api_keys(monkeypatch):
+    """全局注入假 API key，使「在 LLM 调用时」才解析 key 的代码路径在测试中可用。
+
+    背景：`model_cfg.get_api_key()` 在 LLM 调用时（而非 Settings 构造时）读 os.environ；
+    很多测试只在 `Settings()` 构造期临时 patch key，调用期已退出 → 验证/规划的 LLM 调用
+    误入 fail-open。这里在每个测试 session 内保证常用 provider 的 key 存在。
+
+    仅注入实际使用的 provider；**不**注入 cohere/未配置 provider，以免破坏
+    test_config 中「缺 key 应 raise」的负向用例（它们用本地 monkeypatch 覆盖为空值）。
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-fake-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-fake-key")
+
+
 def seed_workspace(workspace_dir: Path) -> None:
     """测试辅助：在 tmp workspace 下写最小 L0 文件，让 assert_runtime_initialized 通过。
 

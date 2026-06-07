@@ -76,6 +76,8 @@ def _make_mock_agent(plan: Plan, evaluate_return: str = "done"):
     agent.memory = _mock_memory_client()
     agent.tool_registry = MagicMock()
     agent.tool_registry.probe_all = AsyncMock()
+    agent.tool_registry.connect_mcp = AsyncMock()
+    agent.tool_registry.close_mcp = AsyncMock()
     agent.tool_registry.clone = MagicMock(return_value=MagicMock())
     agent.tool_registry.set_report_dir = MagicMock()
     agent.tool_registry.agent_written_files = []
